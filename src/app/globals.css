@@ -1,26 +1,93 @@
+
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --nestos-forest: #174C3D;
+  --nestos-lime: #C7F36B;
+  --nestos-cream: #F7F8F3;
+  --nestos-ink: #152B25;
+  --nestos-muted: #64736B;
+  --nestos-border: #E3E9E1;
+  --nestos-white: #FFFFFF;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-forest: var(--nestos-forest);
+  --color-lime: var(--nestos-lime);
+  --color-cream: var(--nestos-cream);
+  --color-ink: var(--nestos-ink);
+  --color-muted: var(--nestos-muted);
+  --color-border: var(--nestos-border);
+
+  --font-sans: Arial, Helvetica, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  margin: 0;
+  background: var(--color-cream);
+  color: var(--color-ink);
   font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+img {
+  max-width: 100%;
+}
+
+::selection {
+  background: var(--color-lime);
+  color: var(--color-ink);
+}
+
+.container-shell {
+  width: min(100% - 40px, 1200px);
+  margin-inline: auto;
+}
+
+.section-spacing {
+  padding-block: 64px;
+}
+
+@media (max-width: 640px) {
+  .container-shell {
+    width: min(100% - 32px, 1200px);
+  }
+
+  .section-spacing {
+    padding-block: 44px;
+  }
 }
