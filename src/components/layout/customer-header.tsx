@@ -1,5 +1,9 @@
+"use client";
 
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
+import SignInModal from "@/components/auth/sign-in-modal";
 
 const navigation = [
   { label: "Services", href: "/services" },
@@ -8,60 +12,78 @@ const navigation = [
 ];
 
 export default function CustomerHeader() {
+  const pathname = usePathname();
+  const [signInOpen, setSignInOpen] = useState(false);
+
+  useEffect(() => {
+    if (pathname === "/") {
+      setSignInOpen(true);
+    }
+  }, [pathname]);
+
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-cream/95 backdrop-blur">
-      <div className="container-shell flex min-h-[76px] items-center justify-between gap-4">
-        <Link href="/" className="flex shrink-0 items-center gap-2">
-          <span className="grid size-10 place-items-center rounded-xl bg-forest text-lg font-bold text-white">
-            N
-          </span>
-          <span className="leading-tight">
-            <span className="block text-lg font-bold tracking-tight text-forest">
-              NestOS
+    <>
+      <header className="sticky top-0 z-50 border-b border-border bg-cream/95 backdrop-blur">
+        <div className="container-shell flex min-h-[76px] items-center justify-between gap-4">
+          <Link href="/" className="flex shrink-0 items-center gap-2">
+            <span className="grid size-10 place-items-center rounded-xl bg-forest text-lg font-bold text-white">
+              N
             </span>
-            <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
-              Services
+
+            <span className="leading-tight">
+              <span className="block text-lg font-bold tracking-tight text-forest">
+                NestOS
+              </span>
+              <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+                Services
+              </span>
             </span>
-          </span>
-        </Link>
+          </Link>
+
+          <nav
+            aria-label="Main navigation"
+            className="hidden items-center gap-7 md:flex"
+          >
+            {navigation.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="text-sm font-medium text-ink transition-colors hover:text-forest"
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+
+          <button
+            type="button"
+            onClick={() => setSignInOpen(true)}
+            className="inline-flex min-h-10 items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition-colors hover:bg-ink"
+          >
+            Sign in
+          </button>
+        </div>
 
         <nav
-          aria-label="Main navigation"
-          className="hidden items-center gap-7 md:flex"
+          aria-label="Mobile navigation"
+          className="flex gap-5 overflow-x-auto border-t border-border px-4 py-3 md:hidden"
         >
           {navigation.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className="text-sm font-medium text-ink transition-colors hover:text-forest"
+              className="shrink-0 text-sm font-medium text-ink"
             >
               {item.label}
             </Link>
           ))}
         </nav>
+      </header>
 
-        <Link
-          href="/account"
-          className="inline-flex min-h-10 items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition-colors hover:bg-ink"
-        >
-          My Account
-        </Link>
-      </div>
-
-      <nav
-        aria-label="Mobile navigation"
-        className="flex gap-5 overflow-x-auto border-t border-border px-4 py-3 md:hidden"
-      >
-        {navigation.map((item) => (
-          <Link
-            key={item.href}
-            href={item.href}
-            className="shrink-0 text-sm font-medium text-ink"
-          >
-            {item.label}
-          </Link>
-        ))}
-      </nav>
-    </header>
+      <SignInModal
+        open={signInOpen}
+        onClose={() => setSignInOpen(false)}
+      />
+    </>
   );
 }
