@@ -26,7 +26,7 @@ export default function CustomerFooter() {
               <Link href="/services" className="hover:text-lime">
                 Services
               </Link>
-              <Link href="/packages" className="hover:text-lime">
+              <Link href="/packages/catalogue" className="hover:text-lime">
                 Packages
               </Link>
               <Link href="/bookings" className="hover:text-lime">
