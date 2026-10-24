@@ -378,7 +378,7 @@ export default function HomePage() {
               </div>
 
               <Link
-                href="/packages"
+                href="/packages/catalogue"
                 className="inline-flex min-h-14 w-fit shrink-0 items-center justify-center gap-3 rounded-full bg-lime px-7 font-semibold text-ink transition hover:bg-white"
               >
                 Explore packages
