@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   bookings,
   paymentStatuses,
@@ -14,15 +14,62 @@ const paymentStyles: Record<string, string> = {
   "Refund Pending": "bg-orange-50 text-orange-700",
 };
 
+const refundStatusStyles: Record<string, string> = {
+  "Pending Review": "bg-amber-50 text-amber-800",
+  Approved: "bg-blue-50 text-blue-800",
+  Rejected: "bg-red-50 text-red-800",
+  Processed: "bg-green-50 text-green-800",
+  "Not Requested": "bg-gray-100 text-gray-600",
+};
+
 export default function OperationsPaymentsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [selectedPayment, setSelectedPayment] =
   useState<(typeof bookings)[number] | null>(null);
 
-  const [refundRecords, setRefundRecords] = useState([
+const [refundRecords, setRefundRecords] = useState([
   ...bookingRefunds,
-  ]);
+]);
+
+const [refundRecordsLoaded, setRefundRecordsLoaded] = useState(false);
+
+// Load previously saved refund decisions when the page opens.
+useEffect(() => {
+  try {
+    const savedRefunds = window.localStorage.getItem(
+      "nestos-operations-refunds"
+    );
+
+    if (savedRefunds) {
+      const parsedRefunds = JSON.parse(savedRefunds);
+
+      if (Array.isArray(parsedRefunds)) {
+        setRefundRecords(parsedRefunds);
+      }
+    }
+  } catch (error) {
+    console.error("Unable to load saved refund records:", error);
+  } finally {
+    setRefundRecordsLoaded(true);
+  }
+}, []);
+
+// Save refund decisions whenever the records change.
+useEffect(() => {
+  if (!refundRecordsLoaded) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      "nestos-operations-refunds",
+      JSON.stringify(refundRecords)
+    );
+  } catch (error) {
+    console.error("Unable to save refund records:", error);
+  }
+}, [refundRecords, refundRecordsLoaded]);
 
   const [selectedRefundId, setSelectedRefundId] = useState<string | null>(
     null
@@ -61,8 +108,8 @@ export default function OperationsPaymentsPage() {
     (booking) => booking.payment === "Pending"
   ).length;
 
-  const refundCount = bookings.filter(
-    (booking) => booking.payment === "Refund Pending"
+  const refundCount = refundRecords.filter(
+  (refund) => refund.status === "Pending Review"
   ).length;
 
   const paidAmount = bookings
@@ -281,28 +328,33 @@ export default function OperationsPaymentsPage() {
                   ₹{refund.amount.toLocaleString("en-IN")}
                 </td>
                 <td className="px-4 py-4 text-gray-600">{refund.reason}</td>
+                
                 <td className="px-4 py-4">
-                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800">
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      refundStatusStyles[refund.status] ??
+                      "bg-gray-100 text-gray-600"
+                    }`}
+                  >
                     {refund.status}
                   </span>
                 </td>
-                <td className="px-4 py-4">
-                  {refund.status === "Pending Review" ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedRefundId(refund.id);
-                        setRefundDecisionNote("");
-                        setRefundDecision(null);
-                      }}
-                      className="font-semibold text-[#174C3D] hover:underline"
-                    >
-                      Review
-                    </button>
-                  ) : (
-                    <span className="text-gray-400">No action</span>
-                  )}
-                </td>
+
+                
+              <td className="px-4 py-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedRefundId(refund.id);
+                    setRefundDecisionNote("");
+                    setRefundDecision(null);
+                  }}
+                  className="font-semibold text-[#174C3D] hover:underline"
+                >
+                  {refund.status === "Pending Review" ? "Review" : "View"}
+                </button>
+              </td>
+
               </tr>
             ))}
 
@@ -317,6 +369,206 @@ export default function OperationsPaymentsPage() {
         </table>
       </div>
     </section>
+    
+{selectedRefund && (
+  <div
+    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
+    onClick={() => {
+      setSelectedRefundId(null);
+      setRefundDecision(null);
+      setRefundDecisionNote("");
+    }}
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="refund-dialog-title"
+      className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-200 bg-white p-6 text-gray-900 shadow-2xl"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2
+            id="refund-dialog-title"
+            className="text-xl font-bold text-gray-900"
+          >
+            Refund Request Review
+          </h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Refund ID: {selectedRefund.id}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedRefundId(null);
+            setRefundDecision(null);
+            setRefundDecisionNote("");
+          }}
+          className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="mt-6 space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+        <div className="flex justify-between gap-4">
+          <span className="text-sm text-gray-500">Booking ID</span>
+          <span className="text-sm font-semibold text-gray-900">
+            {selectedRefund.bookingId}
+          </span>
+        </div>
+
+        <div className="flex justify-between gap-4">
+          <span className="text-sm text-gray-500">Refund amount</span>
+          <span className="text-lg font-bold text-gray-900">
+            ₹{selectedRefund.amount.toLocaleString("en-IN")}
+          </span>
+        </div>
+
+        <div>
+          <p className="text-sm text-gray-500">Reason for refund</p>
+          <p className="mt-1 text-sm leading-6 text-gray-800">
+            {selectedRefund.reason}
+          </p>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm text-gray-500">Current status</span>
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              selectedRefund.status === "Approved"
+                ? "bg-green-100 text-green-800"
+                : selectedRefund.status === "Rejected"
+                  ? "bg-red-100 text-red-800"
+                  : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {selectedRefund.status}
+          </span>
+        </div>
+      </div>
+
+      {selectedRefund.status === "Pending Review" ? (
+        <div className="mt-6">
+          <label className="block text-sm font-semibold text-gray-800">
+            Select your decision
+          </label>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setRefundDecision("Approved")}
+              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                refundDecision === "Approved"
+                  ? "border-green-700 bg-green-50 text-green-800 ring-2 ring-green-700"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              Approve Refund
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRefundDecision("Rejected")}
+              className={`rounded-xl border px-4 py-3 text-sm font-semibold transition ${
+                refundDecision === "Rejected"
+                  ? "border-red-700 bg-red-50 text-red-800 ring-2 ring-red-700"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              Reject Refund
+            </button>
+          </div>
+
+          <label
+            htmlFor="refund-decision-note"
+            className="mt-5 block text-sm font-semibold text-gray-800"
+          >
+            Decision note <span className="text-red-600">*</span>
+          </label>
+
+          <textarea
+            id="refund-decision-note"
+            value={refundDecisionNote}
+            onChange={(event) =>
+              setRefundDecisionNote(event.target.value)
+            }
+            placeholder="Explain the reason for your decision..."
+            rows={4}
+            className="mt-2 w-full rounded-xl border border-gray-300 bg-white p-3 text-sm text-gray-900 placeholder:text-gray-400 outline-none focus:border-[#174C3D] focus:ring-2 focus:ring-[#174C3D]/20"
+          />
+
+          <button
+            type="button"
+            disabled={
+              !refundDecision || !refundDecisionNote.trim()
+            }
+            onClick={() => {
+              if (!refundDecision || !refundDecisionNote.trim()) {
+                return;
+              }
+
+              const confirmed = window.confirm(
+                `Confirm ${refundDecision.toLowerCase()} for refund ${selectedRefund.id}?`
+              );
+
+              if (!confirmed) return;
+
+              setRefundRecords((current) =>
+                current.map((refund) =>
+                  refund.id === selectedRefund.id
+                    ? {
+                        ...refund,
+                        status: refundDecision,
+                        decisionNote: refundDecisionNote.trim(),
+                      }
+                    : refund
+                )
+              );
+
+              setSelectedRefundId(null);
+              setRefundDecision(null);
+              setRefundDecisionNote("");
+            }}
+            className="mt-5 w-full rounded-xl bg-[#174C3D] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#10392E] disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
+          >
+            Confirm Decision
+          </button>
+        </div>
+      ) : (
+        <div className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-4">
+          <h3 className="font-semibold text-gray-900">
+            Decision recorded
+          </h3>
+
+          <p className="mt-2 text-sm text-gray-600">
+            This refund request has been {selectedRefund.status.toLowerCase()}.
+          </p>
+
+          {"decisionNote" in selectedRefund &&
+            selectedRefund.decisionNote && (
+              <div className="mt-4">
+                <p className="text-sm font-semibold text-gray-700">
+                  Decision note
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-600">
+                  {selectedRefund.decisionNote}
+                </p>
+              </div>
+            )}
+        </div>
+      )}
+
+      <p className="mt-5 border-t border-gray-100 pt-4 text-xs leading-5 text-gray-500">
+        This action records an administrative decision in the prototype.
+        It does not initiate a payment-provider refund.
+      </p>
+    </div>
+  </div>
+)}
+
       {selectedPayment && (
         <div
           className="fixed inset-0 z-50 flex justify-end bg-black/40"
