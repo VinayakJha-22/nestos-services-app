@@ -1,3 +1,6 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { bookings } from "@/lib/operations/bookings";
 
 const summaryCards = [
@@ -44,11 +47,38 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function OperationsOverviewPage() {
-  const today = "2026-10-24";
+  const [today, setToday] = useState("");
+  useEffect(() => {
+    setToday(
+      new Date().toLocaleDateString("en-CA", {
+        timeZone: "Asia/Kolkata",
+      }),
+    );
+  }, []);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
 
-  const todaysBookings = bookings.filter(
-    (booking) => booking.date === today,
-  );
+  const todaysBookings = today
+  ? bookings.filter((booking) => booking.date === today)
+  : [];
+  const filteredBookings = todaysBookings.filter((booking) => {
+  const query = searchQuery.trim().toLowerCase();
+
+  const matchesSearch =
+    !query ||
+    [
+      booking.id,
+      booking.customer,
+      booking.phone,
+      booking.vehicle,
+      booking.society,
+    ].some((value) => value.toLowerCase().includes(query));
+
+  const matchesStatus =
+    statusFilter === "All" || booking.status === statusFilter;
+
+  return matchesSearch && matchesStatus;
+});
 
   const completedCount = todaysBookings.filter(
     (booking) => booking.status === "Completed",
@@ -143,7 +173,34 @@ export default function OperationsOverviewPage() {
           </span>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto">    
+          <div className="flex flex-col gap-3 border-b border-gray-100 p-5 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search booking, customer, phone, vehicle, or society..."
+                aria-label="Search bookings"
+                className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition placeholder:text-gray-400 focus:border-[#174C3D] focus:ring-2 focus:ring-[#174C3D]/10"
+              />
+            </div>
+
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value)}
+              aria-label="Filter bookings by status"
+              className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:border-[#174C3D]"
+            >
+              <option value="All">All statuses</option>
+              <option value="Confirmed">Confirmed</option>
+              <option value="Assigned">Assigned</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+          </div>
+
           <table className="w-full min-w-[850px] text-left text-sm">
             <thead className="bg-[#F7F8F3] text-xs uppercase tracking-wide text-gray-500">
               <tr>
@@ -156,7 +213,7 @@ export default function OperationsOverviewPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {todaysBookings.map((booking) => (
+              {filteredBookings.map((booking) => (
                 <tr key={booking.id} className="transition hover:bg-gray-50">
                   <td className="px-5 py-4 font-semibold text-[#174C3D]">
                     {booking.id}
@@ -177,6 +234,16 @@ export default function OperationsOverviewPage() {
                   </td>
                 </tr>
               ))}
+              {filteredBookings.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-5 py-10 text-center text-sm text-gray-500"
+                  >
+                    No bookings match your search or selected status.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

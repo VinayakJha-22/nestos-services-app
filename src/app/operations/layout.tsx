@@ -4,6 +4,8 @@ import Link from "next/link";
 const navigation = [
   { label: "Overview", href: "/operations" },
   { label: "Bookings", href: "/operations/bookings" },
+  { label: "Payments", href: "/operations/payments" },
+  { label: "Change Requests", href: "/operations/change-requests" },
   { label: "Reports", href: "/operations/reports" },
 ];
 
