@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { services } from "@/config/services";
-import { societies } from "@/config/societies";
 
 export default function ServicesPage() {
   const router = useRouter();
@@ -14,26 +13,71 @@ export default function ServicesPage() {
   const [societyName, setSocietyName] = useState("");
   const [isCheckingSociety, setIsCheckingSociety] = useState(true);
 
+  
   useEffect(() => {
-    const savedSocietyId = sessionStorage.getItem(
-      "nestos-selected-society"
-    );
+    let cancelled = false;
 
-    const selectedSociety = societies.find(
-      (society) =>
-        society.id === savedSocietyId &&
-        society.status === "accepting"
-    );
+    async function loadSelectedSociety() {
+      const savedSocietyId = sessionStorage.getItem(
+        "nestos-selected-society",
+      );
 
-    if (!selectedSociety) {
-      router.replace("/societies");
-      return;
+      if (!savedSocietyId) {
+        router.replace("/societies");
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/societies", {
+          cache: "no-store",
+        });
+
+        const data = (await response.json()) as {
+          success: boolean;
+          societies?: {
+            id: string;
+            name: string;
+            is_accepting_bookings: boolean;
+          }[];
+        };
+
+        if (!response.ok || !data.success) {
+          throw new Error("Unable to verify the selected society.");
+        }
+
+        const selectedSociety = (data.societies ?? []).find(
+          (society) =>
+            society.id === savedSocietyId &&
+            society.is_accepting_bookings,
+        );
+
+        if (cancelled) return;
+
+        if (!selectedSociety) {
+          sessionStorage.removeItem("nestos-selected-society");
+          router.replace("/societies");
+          return;
+        }
+
+        setSocietyId(selectedSociety.id);
+        setSocietyName(selectedSociety.name);
+        setIsCheckingSociety(false);
+      } catch (error) {
+        console.error("Failed to verify selected society:", error);
+
+        if (!cancelled) {
+          router.replace("/societies");
+        }
+      }
     }
 
-    setSocietyId(selectedSociety.id);
-    setSocietyName(selectedSociety.name);
-    setIsCheckingSociety(false);
+    loadSelectedSociety();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
+
 
   if (isCheckingSociety || !societyId) {
     return (

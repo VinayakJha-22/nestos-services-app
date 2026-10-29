@@ -1,11 +1,31 @@
 
+
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { societies } from "@/config/societies";
-import type { Society } from "@/types/society";
+
+type SocietyStatus = "accepting" | "coming-soon" | "unavailable";
+
+type Society = {
+  id: string;
+  name: string;
+  address: string;
+  locality: string;
+  city: string;
+  status: SocietyStatus;
+};
+
+type ApiSociety = {
+  id: string;
+  name: string;
+  address_line: string;
+  locality: string;
+  city: string;
+  is_accepting_bookings: boolean;
+};
+
 
 function statusDetails(status: Society["status"]) {
   switch (status) {
@@ -27,9 +47,59 @@ function statusDetails(status: Society["status"]) {
   }
 }
 
+
 export default function SocietiesPage() {
   const router = useRouter();
   const [search, setSearch] = useState("");
+  const [societies, setSocieties] = useState<Society[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    async function loadSocieties() {
+      try {
+        setLoading(true);
+        setLoadError("");
+
+        const response = await fetch("/api/societies", {
+          cache: "no-store",
+        });
+
+        const data = (await response.json()) as {
+          success: boolean;
+          societies?: ApiSociety[];
+          error?: string;
+        };
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || "Unable to load societies.");
+        }
+
+        const mappedSocieties: Society[] = (data.societies ?? []).map(
+          (society) => ({
+            id: society.id,
+            name: society.name,
+            address: society.address_line,
+            locality: society.locality,
+            city: society.city,
+            status: society.is_accepting_bookings
+              ? "accepting"
+              : "unavailable",
+          }),
+        );
+
+        setSocieties(mappedSocieties);
+      } catch (error) {
+        console.error("Failed to load societies:", error);
+        setLoadError("We couldn't load locations. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadSocieties();
+  }, []);
+
 
   const filteredSocieties = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -44,7 +114,7 @@ export default function SocietiesPage() {
         society.city,
       ].some((value) => value.toLowerCase().includes(term)),
     );
-  }, [search]);
+    }, [search, societies]);
 
   function selectSociety(society: Society) {
     if (society.status !== "accepting") return;
@@ -147,7 +217,25 @@ export default function SocietiesPage() {
           </span>
         </div>
 
-        {filteredSocieties.length > 0 ? (
+        {loading ? (
+  <div className="mt-8 rounded-[24px] border border-border bg-white px-5 py-14 text-center">
+    <p className="text-sm text-muted">Loading available societies...</p>
+  </div>
+) : loadError ? (
+  <div className="mt-8 rounded-[24px] border border-border bg-white px-5 py-14 text-center">
+    <h3 className="text-lg font-bold text-ink">
+      Unable to load locations
+    </h3>
+    <p className="mt-2 text-sm text-muted">{loadError}</p>
+    <button
+      type="button"
+      onClick={() => window.location.reload()}
+      className="mt-5 rounded-full bg-forest px-6 py-3 text-sm font-semibold text-white hover:bg-ink"
+    >
+      Try again
+    </button>
+  </div>
+) : filteredSocieties.length > 0 ? (
           <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {filteredSocieties.map((society) => {
               const status = statusDetails(society.status);
@@ -253,9 +341,8 @@ export default function SocietiesPage() {
         )}
 
         <p className="mt-8 rounded-2xl border border-border bg-white p-4 text-xs leading-5 text-muted">
-          These are sample locations for development. Actual society addresses,
-          service eligibility and booking availability must come from
-          verified operational data before launch.
+          Only societies currently accepting bookings are shown. Booking eligibility
+and slot availability will be checked again during the booking process.
         </p>
       </section>
     </div>
