@@ -4,8 +4,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { services } from "@/config/services";
-import { societies } from "@/config/societies";
 import { bookingPreview } from "@/config/booking-preview";
 
 type BookingDate = {
@@ -17,6 +15,15 @@ type BookingDate = {
 };
 
 type VehicleType = "Hatchback" | "Sedan" | "SUV";
+
+type Service = {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  featured: boolean;
+  duration_minutes: number | null;
+};
 
 function getLocalDateString(date: Date) {
   const year = date.getFullYear();
@@ -63,56 +70,109 @@ export default function BookingCalendarPage() {
   const [societyId, setSocietyId] = useState("");
   const [societyName, setSocietyName] = useState("");
   const [isReady, setIsReady] = useState(false);
+  const [service, setService] = useState<Service | null>(null);
+  const [isLoadingService, setIsLoadingService] = useState(true);
+  const [serviceError, setServiceError] = useState("");
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const requestedServiceId = params.get("service") ?? "";
+    let cancelled = false;
 
-    const selectedService = services.find(
-      (service) => service.id === requestedServiceId
-    );
+    async function loadBookingDetails() {
+      const params = new URLSearchParams(window.location.search);
+      const requestedServiceId = params.get("service") ?? "";
 
-    const savedSocietyId = sessionStorage.getItem(
-      "nestos-selected-society"
-    );
-
-    const selectedSociety = societies.find(
-      (society) =>
-        society.id === savedSocietyId &&
-        society.status === "accepting"
-    );
-
-    if (!selectedService || !selectedSociety) {
-      router.replace(
-        selectedSociety ? "/services" : "/societies"
+      const savedSocietyId = sessionStorage.getItem(
+        "nestos-selected-society"
       );
-      return;
+
+      if (!requestedServiceId || !savedSocietyId) {
+        router.replace(savedSocietyId ? "/services" : "/societies");
+        return;
+      }
+
+      try {
+        setIsLoadingService(true);
+        setServiceError("");
+
+        const [societiesResponse, servicesResponse] = await Promise.all([
+          fetch("/api/societies", { cache: "no-store" }),
+          fetch(
+            `/api/services?societyId=${encodeURIComponent(savedSocietyId)}`,
+            { cache: "no-store" }
+          ),
+        ]);
+
+        const societiesData = await societiesResponse.json();
+        const servicesData = await servicesResponse.json();
+
+        if (!societiesResponse.ok || !societiesData.success) {
+          throw new Error("Unable to verify the selected society.");
+        }
+
+        if (!servicesResponse.ok || !servicesData.success) {
+          throw new Error("Unable to load services for this society.");
+        }
+
+        const selectedSociety = societiesData.societies.find(
+          (item: { id: string; name: string }) =>
+            item.id === savedSocietyId
+        );
+
+        const selectedService = servicesData.services.find(
+          (item: Service) => item.id === requestedServiceId
+        );
+
+        if (!selectedSociety || !selectedService) {
+          router.replace(selectedSociety ? "/services" : "/societies");
+          return;
+        }
+
+        if (!cancelled) {
+          setService(selectedService);
+          setServiceId(selectedService.id);
+          setSocietyId(selectedSociety.id);
+          setSocietyName(selectedSociety.name);
+
+          const availableDates = createBookingDates();
+          setDates(availableDates);
+
+          const firstOperatingDay = availableDates.find(
+            (date) => date.isOperatingDay
+          );
+
+          if (firstOperatingDay) {
+            setSelectedDate(firstOperatingDay.value);
+          }
+
+          setIsReady(true);
+        }
+      } catch (error) {
+        console.error("Failed to load booking details:", error);
+
+        if (!cancelled) {
+          setServiceError(
+            "Unable to load booking details. Please refresh the page."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingService(false);
+        }
+      }
     }
 
-    const availableDates = createBookingDates();
+    loadBookingDetails();
 
-    setServiceId(selectedService.id);
-    setSocietyId(selectedSociety.id);
-    setSocietyName(selectedSociety.name);
-    setDates(availableDates);
-
-    const firstOperatingDay = availableDates.find(
-      (date) => date.isOperatingDay
-    );
-
-    if (firstOperatingDay) {
-      setSelectedDate(firstOperatingDay.value);
-    }
-
-    setIsReady(true);
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  const service = services.find(
-    (item) => item.id === serviceId
-  );
+
 
   const vehicleSurcharge = vehicle === "SUV" ? 100 : 0;
-  const totalPrice = (service?.price ?? 0) + vehicleSurcharge;
+  const servicePrice = Number(service?.price ?? 0);
+  const totalPrice = servicePrice + vehicleSurcharge;
 
   // DEMO ONLY: simulated slot availability.
   // This must be replaced with live backend availability.
@@ -156,11 +216,21 @@ export default function BookingCalendarPage() {
     router.push("/booking/review");
   }
 
-  if (!isReady || !service) {
+  if (isLoadingService || !isReady) {
     return (
       <div className="container-shell flex min-h-[50vh] items-center justify-center">
         <p className="text-sm text-muted">
           Preparing your booking...
+        </p>
+      </div>
+    );
+  }
+
+  if (serviceError || !service) {
+    return (
+      <div className="container-shell flex min-h-[50vh] items-center justify-center">
+        <p className="text-sm text-red-600">
+          {serviceError || "Unable to load the selected service."}
         </p>
       </div>
     );
@@ -234,13 +304,12 @@ export default function BookingCalendarPage() {
                         setSelectedDate(date.value);
                         setSelectedSlot("");
                       }}
-                      className={`flex min-h-[94px] flex-col items-center justify-center rounded-2xl border px-1 py-3 transition ${
-                        isSelected
-                          ? "border-forest bg-forest text-white"
-                          : date.isOperatingDay
-                            ? "border-border bg-white text-ink hover:border-forest"
-                            : "cursor-not-allowed border-border bg-gray-50 text-gray-400"
-                      }`}
+                      className={`flex min-h-[94px] flex-col items-center justify-center rounded-2xl border px-1 py-3 transition ${isSelected
+                        ? "border-forest bg-forest text-white"
+                        : date.isOperatingDay
+                          ? "border-border bg-white text-ink hover:border-forest"
+                          : "cursor-not-allowed border-border bg-gray-50 text-gray-400"
+                        }`}
                     >
                       <span className="text-xs">
                         {date.weekday}
@@ -283,13 +352,12 @@ export default function BookingCalendarPage() {
                       type="button"
                       disabled={!slot.available}
                       onClick={() => setSelectedSlot(slot.time)}
-                      className={`min-h-12 rounded-xl border px-3 py-3 text-sm font-semibold transition ${
-                        selectedSlot === slot.time
-                          ? "border-forest bg-forest text-white"
-                          : slot.available
-                            ? "border-border bg-white text-ink hover:border-forest"
-                            : "cursor-not-allowed border-border bg-gray-50 text-gray-400 line-through"
-                      }`}
+                      className={`min-h-12 rounded-xl border px-3 py-3 text-sm font-semibold transition ${selectedSlot === slot.time
+                        ? "border-forest bg-forest text-white"
+                        : slot.available
+                          ? "border-border bg-white text-ink hover:border-forest"
+                          : "cursor-not-allowed border-border bg-gray-50 text-gray-400 line-through"
+                        }`}
                     >
                       {slot.time}
                       {!slot.available && (
@@ -329,11 +397,10 @@ export default function BookingCalendarPage() {
                     key={item.name}
                     type="button"
                     onClick={() => setVehicle(item.name)}
-                    className={`rounded-2xl border p-4 text-left transition ${
-                      vehicle === item.name
-                        ? "border-forest bg-forest/5 ring-1 ring-forest"
-                        : "border-border hover:border-forest"
-                    }`}
+                    className={`rounded-2xl border p-4 text-left transition ${vehicle === item.name
+                      ? "border-forest bg-forest/5 ring-1 ring-forest"
+                      : "border-border hover:border-forest"
+                      }`}
                   >
                     <span className="block font-semibold text-ink">
                       {item.name}

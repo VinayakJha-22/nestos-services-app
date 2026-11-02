@@ -4,8 +4,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { services } from "@/config/services";
-import { societies } from "@/config/societies";
 
 type VehicleType = "Hatchback" | "Sedan" | "SUV";
 
@@ -15,6 +13,22 @@ type BookingDraft = {
   date: string;
   time: string;
   vehicle: VehicleType;
+};
+
+type Service = {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  featured: boolean;
+  duration_minutes: number | null;
+};
+
+type Society = {
+  id: string;
+  name: string;
+  locality: string;
+  city: string;
 };
 
 function formatBookingDate(value: string) {
@@ -42,64 +56,112 @@ export default function BookingReviewPage() {
 
   const [draft, setDraft] = useState<BookingDraft | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [service, setService] = useState<Service | null>(null);
+  const [society, setSociety] = useState<Society | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    try {
-      const rawDraft = sessionStorage.getItem(
-        "nestos-booking-draft"
-      );
+    let cancelled = false;
 
-      if (!rawDraft) {
-        router.replace("/services");
-        return;
+    async function loadBookingDetails() {
+      try {
+        const rawDraft = sessionStorage.getItem(
+          "nestos-booking-draft"
+        );
+
+        if (!rawDraft) {
+          router.replace("/services");
+          return;
+        }
+
+        const parsed = JSON.parse(rawDraft) as Partial<BookingDraft>;
+
+        const validVehicles: VehicleType[] = [
+          "Hatchback",
+          "Sedan",
+          "SUV",
+        ];
+
+        const isValid =
+          typeof parsed.societyId === "string" &&
+          typeof parsed.serviceId === "string" &&
+          typeof parsed.date === "string" &&
+          typeof parsed.time === "string" &&
+          validVehicles.includes(parsed.vehicle as VehicleType);
+
+        if (!isValid) {
+          sessionStorage.removeItem("nestos-booking-draft");
+          router.replace("/services");
+          return;
+        }
+
+        const [societiesResponse, servicesResponse] = await Promise.all([
+          fetch("/api/societies", { cache: "no-store" }),
+          fetch(
+            `/api/services?societyId=${encodeURIComponent(parsed.societyId!)}`,
+            { cache: "no-store" }
+          ),
+        ]);
+
+        const societiesData = await societiesResponse.json();
+        const servicesData = await servicesResponse.json();
+
+        if (!societiesResponse.ok || !societiesData.success) {
+          throw new Error("Unable to verify the selected society.");
+        }
+
+        if (!servicesResponse.ok || !servicesData.success) {
+          throw new Error("Unable to load the service price.");
+        }
+
+        const selectedSociety = societiesData.societies.find(
+          (item: Society) => item.id === parsed.societyId
+        );
+
+        const selectedService = servicesData.services.find(
+          (item: Service) => item.id === parsed.serviceId
+        );
+
+        if (!selectedSociety || !selectedService) {
+          sessionStorage.removeItem("nestos-booking-draft");
+          router.replace(selectedSociety ? "/services" : "/societies");
+          return;
+        }
+
+        if (!cancelled) {
+          setDraft(parsed as BookingDraft);
+          setSociety(selectedSociety);
+
+          setService({
+            ...selectedService,
+            price: Number(selectedService.price),
+          });
+        }
+      } catch (error) {
+        console.error("Failed to load booking review:", error);
+
+        if (!cancelled) {
+          setLoadError(
+            "Unable to load your booking details. Please refresh the page."
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+          setIsReady(true);
+        }
       }
-
-      const parsed = JSON.parse(rawDraft) as Partial<BookingDraft>;
-
-      const validVehicles: VehicleType[] = [
-        "Hatchback",
-        "Sedan",
-        "SUV",
-      ];
-
-      const isValid =
-        typeof parsed.societyId === "string" &&
-        typeof parsed.serviceId === "string" &&
-        typeof parsed.date === "string" &&
-        typeof parsed.time === "string" &&
-        validVehicles.includes(parsed.vehicle as VehicleType);
-
-      if (!isValid) {
-        sessionStorage.removeItem("nestos-booking-draft");
-        router.replace("/services");
-        return;
-      }
-
-      const society = societies.find(
-        (item) =>
-          item.id === parsed.societyId &&
-          item.status === "accepting"
-      );
-
-      const service = services.find(
-        (item) => item.id === parsed.serviceId
-      );
-
-      if (!society || !service) {
-        sessionStorage.removeItem("nestos-booking-draft");
-        router.replace(society ? "/services" : "/societies");
-        return;
-      }
-
-      setDraft(parsed as BookingDraft);
-      setIsReady(true);
-    } catch {
-      sessionStorage.removeItem("nestos-booking-draft");
-      router.replace("/services");
     }
+
+    loadBookingDetails();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  if (!isReady || !draft) {
+  if (!isReady || isLoading) {
     return (
       <div className="container-shell flex min-h-[50vh] items-center justify-center">
         <p className="text-sm text-muted">
@@ -109,22 +171,24 @@ export default function BookingReviewPage() {
     );
   }
 
-  const service = services.find(
-    (item) => item.id === draft.serviceId
-  );
-
-  const society = societies.find(
-    (item) => item.id === draft.societyId
-  );
-
-  if (!service || !society) {
-    return null;
+  if (loadError || !draft || !service || !society) {
+    return (
+      <div className="container-shell flex min-h-[50vh] items-center justify-center">
+        <p className="text-sm text-red-600">
+          {loadError || "Unable to load your booking details."}
+        </p>
+      </div>
+    );
   }
+
 
   // Displayed price is recalculated from configured service data.
   // The backend must independently validate the final price.
+  const servicePrice = parseFloat(String(service.price));
   const vehicleSurcharge = draft.vehicle === "SUV" ? 100 : 0;
-  const totalPrice = service.price + vehicleSurcharge;
+
+  const totalPrice =
+    Math.round((servicePrice + vehicleSurcharge) * 100) / 100;
 
   function continueBooking() {
     router.push("/booking/verify");
@@ -291,7 +355,7 @@ export default function BookingReviewPage() {
               <div className="flex items-start justify-between gap-4">
                 <span className="text-muted">{service.name}</span>
                 <span className="font-medium text-ink">
-                  ₹{service.price}
+                  ₹{servicePrice.toFixed(2)}
                 </span>
               </div>
 
@@ -300,7 +364,7 @@ export default function BookingReviewPage() {
                   {draft.vehicle} surcharge
                 </span>
                 <span className="font-medium text-ink">
-                  ₹{vehicleSurcharge}
+                  ₹{vehicleSurcharge.toFixed(2)}
                 </span>
               </div>
             </div>
@@ -311,7 +375,7 @@ export default function BookingReviewPage() {
                   Total payable
                 </span>
                 <span className="text-3xl font-bold text-forest">
-                  ₹{totalPrice}
+                  ₹{totalPrice.toFixed(2)}
                 </span>
               </div>
               <p className="mt-2 text-xs leading-5 text-muted">

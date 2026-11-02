@@ -4,8 +4,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { services } from "@/config/services";
-import { societies } from "@/config/societies";
 
 export default function ServicesPage() {
   const router = useRouter();
@@ -14,26 +12,116 @@ export default function ServicesPage() {
   const [societyName, setSocietyName] = useState("");
   const [isCheckingSociety, setIsCheckingSociety] = useState(true);
 
+  type Service = {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  featured: boolean;
+  duration_minutes: number | null;
+};
+
+const [services, setServices] = useState<Service[]>([]);
+const [isLoadingServices, setIsLoadingServices] = useState(false);
+const [serviceError, setServiceError] = useState("");
+
+  
   useEffect(() => {
-    const savedSocietyId = sessionStorage.getItem(
-      "nestos-selected-society"
-    );
+    let cancelled = false;
 
-    const selectedSociety = societies.find(
-      (society) =>
-        society.id === savedSocietyId &&
-        society.status === "accepting"
-    );
+    async function loadSelectedSociety() {
+      const savedSocietyId = sessionStorage.getItem(
+        "nestos-selected-society",
+      );
 
-    if (!selectedSociety) {
-      router.replace("/societies");
-      return;
+      if (!savedSocietyId) {
+        router.replace("/societies");
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/societies", {
+          cache: "no-store",
+        });
+
+        const data = (await response.json()) as {
+          success: boolean;
+          societies?: {
+            id: string;
+            name: string;
+            is_accepting_bookings: boolean;
+          }[];
+        };
+
+        if (!response.ok || !data.success) {
+          throw new Error("Unable to verify the selected society.");
+        }
+
+        const selectedSociety = (data.societies ?? []).find(
+          (society) =>
+            society.id === savedSocietyId &&
+            society.is_accepting_bookings,
+        );
+
+        if (cancelled) return;
+
+        if (!selectedSociety) {
+          sessionStorage.removeItem("nestos-selected-society");
+          router.replace("/societies");
+          return;
+        }
+
+        setSocietyId(selectedSociety.id);
+setSocietyName(selectedSociety.name);
+setIsCheckingSociety(false);
+
+setIsLoadingServices(true);
+setServiceError("");
+
+try {
+  const servicesResponse = await fetch(
+    `/api/services?societyId=${encodeURIComponent(selectedSociety.id)}`,
+    { cache: "no-store" }
+  );
+
+  const servicesData = await servicesResponse.json();
+
+  if (!servicesResponse.ok || !servicesData.success) {
+    throw new Error(
+      servicesData.error || "Unable to load services."
+    );
+  }
+
+  if (!cancelled) {
+    setServices(servicesData.services ?? []);
+  }
+} catch (error) {
+  console.error("Failed to load services:", error);
+
+  if (!cancelled) {
+    setServiceError("Unable to load services. Please refresh the page.");
+  }
+} finally {
+  if (!cancelled) {
+    setIsLoadingServices(false);
+  }
+}
+      } catch (error) {
+        console.error("Failed to verify selected society:", error);
+
+        if (!cancelled) {
+          router.replace("/societies");
+        }
+      }
     }
 
-    setSocietyId(selectedSociety.id);
-    setSocietyName(selectedSociety.name);
-    setIsCheckingSociety(false);
+    loadSelectedSociety();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
+
 
   if (isCheckingSociety || !societyId) {
     return (
@@ -115,9 +203,26 @@ export default function ServicesPage() {
             Clear pricing. Convenient booking.
           </p>
         </div>
+        {isLoadingServices && (
+  <p className="py-8 text-center text-sm text-muted">
+    Loading available services...
+  </p>
+)}
 
-        <div className="grid gap-5 md:grid-cols-3">
-          {services.map((service, index) => (
+{serviceError && (
+  <p className="py-8 text-center text-sm text-red-600">
+    {serviceError}
+  </p>
+)}
+
+{!isLoadingServices && !serviceError && services.length === 0 && (
+  <p className="py-8 text-center text-sm text-muted">
+    No services are currently available at this society.
+  </p>
+)}
+{!isLoadingServices && !serviceError && services.length > 0 && (
+  <div className="grid gap-5 md:grid-cols-3">
+    {services.map((service, index) => (
             <article
               key={service.id}
               className={`relative flex flex-col rounded-3xl border bg-white p-6 transition duration-200 hover:-translate-y-1 hover:shadow-lg ${
@@ -232,7 +337,7 @@ export default function ServicesPage() {
             </article>
           ))}
         </div>
-
+)}
         <p className="mt-7 text-center text-xs leading-5 text-muted">
           Final pricing will be confirmed during booking. Vehicle-related
           surcharges, where applicable, will be shown before payment.
