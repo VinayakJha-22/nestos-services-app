@@ -12,12 +12,14 @@ export default function BookingVerifyPage() {
   const [otp, setOtp] = useState("");
   const [step, setStep] = useState<"phone" | "otp">("phone");
   const [message, setMessage] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const normalisedPhone = phone.replace(/\D/g, "");
   const isPhoneValid = /^[6-9]\d{9}$/.test(normalisedPhone);
   const isOtpValid = /^\d{6}$/.test(otp);
 
-  function handleSendOtp() {
+  async function handleSendOtp() {
     setMessage("");
 
     if (!isPhoneValid) {
@@ -25,24 +27,81 @@ export default function BookingVerifyPage() {
       return;
     }
 
-    // UI preview only. No OTP is sent by this page.
-    setStep("otp");
+    setIsSending(true);
+
+    try {
+      const response = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          phone: normalisedPhone,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to send OTP. Please try again.");
+      }
+
+      setStep("otp");
+      setMessage("");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to send OTP. Please try again."
+      );
+    } finally {
+      setIsSending(false);
+    }
   }
 
-  function handleVerifyPreview() {
+  async function handleVerifyOtp() {
     setMessage("");
 
     if (!isOtpValid) {
-      setMessage("Enter a 6-digit code to preview this step.");
+      setMessage("Enter a valid 6-digit verification code.");
       return;
     }
 
-    // This is explicitly a demo marker, NOT authentication.
-    // Never use this value to authorize a real booking or payment.
-    sessionStorage.setItem("nestos-demo-phone", normalisedPhone);
-    sessionStorage.setItem("nestos-demo-otp-step", "preview-only");
+    setIsVerifying(true);
 
-    router.push("/booking/payment");
+    try {
+      const response = await fetch("/api/auth/verify-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          phone: normalisedPhone,
+          otp,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "OTP verification failed. Please try again.");
+      }
+
+      if (data.requiresProfile) {
+        router.push("/booking/profile");
+        return;
+      }
+
+      router.push("/booking/payment");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to verify OTP. Please try again."
+      );
+    } finally {
+      setIsVerifying(false);
+    }
   }
 
   return (
@@ -95,9 +154,9 @@ export default function BookingVerifyPage() {
           </div>
 
           <div className="mb-6 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-            <strong>Development preview:</strong> SMS delivery and real OTP
-            verification are not connected. This screen is for UI testing
-            only and must not be used to authenticate real customers.
+            <strong>Integration in progress:</strong> Real WhatsApp OTP delivery is
+            connected. OTP verification and customer sign-in are being connected next.
+            Do not use the preview verification button yet.
           </div>
 
           {step === "phone" ? (
@@ -112,8 +171,8 @@ export default function BookingVerifyPage() {
               </h2>
 
               <p className="mt-2 text-sm leading-6 text-muted">
-                Enter your Indian mobile number. The production version
-                will send a one-time password to verify it.
+                Enter your Indian mobile number. We'll send a one-time
+                password to your WhatsApp number.
               </p>
 
               <label
@@ -160,16 +219,17 @@ export default function BookingVerifyPage() {
 
               <button
                 type="submit"
-                className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink"
+                disabled={isSending}
+                className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Preview OTP step →
+                {isSending ? "Sending OTP..." : "Send verification code →"}
               </button>
             </form>
           ) : (
             <form
               onSubmit={(event) => {
                 event.preventDefault();
-                handleVerifyPreview();
+                handleVerifyOtp();
               }}
             >
               <h2 className="text-xl font-bold text-ink">
@@ -177,8 +237,7 @@ export default function BookingVerifyPage() {
               </h2>
 
               <p className="mt-2 text-sm leading-6 text-muted">
-                Previewing verification for +91 {normalisedPhone}.
-                No real OTP has been sent.
+                Enter the 6-digit code sent to WhatsApp at +91 {normalisedPhone}.
               </p>
 
               <label
@@ -202,7 +261,7 @@ export default function BookingVerifyPage() {
                   );
                   setMessage("");
                 }}
-                placeholder="Enter any 6 digits for preview"
+                placeholder="Enter 6 digits OTP"
                 className="mt-2 w-full rounded-xl border border-border px-4 py-4 text-center text-xl font-bold tracking-[0.4em] text-ink outline-none focus:border-forest"
               />
 
@@ -212,12 +271,13 @@ export default function BookingVerifyPage() {
                 </p>
               )}
 
-              <button
-                type="submit"
-                className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink"
-              >
-                Continue in preview mode →
-              </button>
+                <button
+                  type="submit"
+                  disabled={isVerifying}
+                  className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isVerifying ? "Verifying OTP..." : "Verify and continue →"}
+                </button>
 
               <button
                 type="button"

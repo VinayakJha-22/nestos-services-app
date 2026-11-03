@@ -87,7 +87,7 @@ export default function BookingPaymentPage() {
         serviceId: parsed.serviceId,
         date: parsed.date,
         time: parsed.time,
-        vehicle: parsed.vehicle,
+        vehicle: parsed.vehicle as VehicleType,
       });
       setReady(true);
     } catch {
