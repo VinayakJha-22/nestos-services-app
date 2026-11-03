@@ -4,9 +4,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { services } from "@/config/services";
-import { societies } from "@/config/societies";
-
 type VehicleType = "Hatchback" | "Sedan" | "SUV";
 
 type BookingDraft = {
@@ -15,6 +12,23 @@ type BookingDraft = {
   date: string;
   time: string;
   vehicle: VehicleType;
+};
+
+type Society = {
+  id: string;
+  name: string;
+  locality: string;
+  city: string;
+  is_accepting_bookings: boolean;
+};
+
+type Service = {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  featured: boolean;
+  duration_minutes: number | null;
 };
 
 function formatDate(value: string) {
@@ -32,71 +46,120 @@ export default function BookingPaymentPage() {
   const router = useRouter();
 
   const [draft, setDraft] = useState<BookingDraft | null>(null);
+  const [society, setSociety] = useState<Society | null>(null);
+  const [service, setService] = useState<Service | null>(null);
   const [ready, setReady] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    try {
-      const rawDraft = sessionStorage.getItem("nestos-booking-draft");
+    let cancelled = false;
 
-      if (!rawDraft) {
-        router.replace("/services");
-        return;
+    async function loadBookingDetails() {
+      try {
+        const rawDraft = sessionStorage.getItem("nestos-booking-draft");
+
+        if (!rawDraft) {
+          router.replace("/services");
+          return;
+        }
+
+        const parsed = JSON.parse(rawDraft) as Partial<BookingDraft>;
+
+        const validVehicle =
+          parsed.vehicle === "Hatchback" ||
+          parsed.vehicle === "Sedan" ||
+          parsed.vehicle === "SUV";
+
+        if (
+          typeof parsed.societyId !== "string" ||
+          typeof parsed.serviceId !== "string" ||
+          typeof parsed.date !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ||
+          typeof parsed.time !== "string" ||
+          !validVehicle
+        ) {
+          router.replace("/services");
+          return;
+        }
+
+        const [societiesResponse, servicesResponse] = await Promise.all([
+          fetch("/api/societies", { cache: "no-store" }),
+          fetch(
+            `/api/services?societyId=${encodeURIComponent(parsed.societyId)}`,
+            { cache: "no-store" }
+          ),
+        ]);
+
+        const societiesData = await societiesResponse.json();
+        const servicesData = await servicesResponse.json();
+
+        if (!societiesResponse.ok || !societiesData.success) {
+          throw new Error("Unable to verify the selected society.");
+        }
+
+        if (!servicesResponse.ok || !servicesData.success) {
+          throw new Error("Unable to load the selected service.");
+        }
+
+        const selectedSociety = societiesData.societies.find(
+          (item: Society) => item.id === parsed.societyId
+        );
+
+        const selectedService = servicesData.services.find(
+          (item: Service) => item.id === parsed.serviceId
+        );
+
+        if (!selectedSociety) {
+          router.replace("/societies");
+          return;
+        }
+
+        if (!selectedService) {
+          router.replace("/services");
+          return;
+        }
+
+        if (cancelled) return;
+
+        setSociety(selectedSociety);
+        setService(selectedService);
+
+        setDraft({
+          societyId: parsed.societyId,
+          serviceId: parsed.serviceId,
+          date: parsed.date,
+          time: parsed.time,
+          vehicle: parsed.vehicle as VehicleType,
+        });
+
+        setReady(true);
+      } catch (error) {
+        console.error("Failed to load booking details:", error);
+
+        if (!cancelled) {
+          setLoadError(
+            "Unable to load your booking details. Please refresh the page."
+          );
+        }
       }
-
-      const parsed = JSON.parse(rawDraft) as Partial<BookingDraft>;
-
-      const validVehicle =
-        parsed.vehicle === "Hatchback" ||
-        parsed.vehicle === "Sedan" ||
-        parsed.vehicle === "SUV";
-
-      if (
-        typeof parsed.societyId !== "string" ||
-        typeof parsed.serviceId !== "string" ||
-        typeof parsed.date !== "string" ||
-        !/^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ||
-        typeof parsed.time !== "string" ||
-        !validVehicle
-      ) {
-        router.replace("/services");
-        return;
-      }
-
-      const selectedSociety = societies.find(
-        (item) =>
-          item.id === parsed.societyId && item.status === "accepting"
-      );
-
-      const selectedService = services.find(
-        (item) => item.id === parsed.serviceId
-      );
-
-      if (!selectedSociety) {
-        router.replace("/societies");
-        return;
-      }
-
-      if (!selectedService) {
-        router.replace("/services");
-        return;
-      }
-
-      setDraft({
-        societyId: parsed.societyId,
-        serviceId: parsed.serviceId,
-        date: parsed.date,
-        time: parsed.time,
-        vehicle: parsed.vehicle as VehicleType,
-      });
-      setReady(true);
-    } catch {
-      router.replace("/services");
     }
+
+    loadBookingDetails();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
-  const service = services.find((item) => item.id === draft?.serviceId);
-  const society = societies.find((item) => item.id === draft?.societyId);
+
+  if (loadError) {
+    return (
+      <div className="container-shell py-20 text-center text-red-600">
+        {loadError}
+      </div>
+    );
+  }
 
   if (!ready || !draft || !service || !society) {
     return (

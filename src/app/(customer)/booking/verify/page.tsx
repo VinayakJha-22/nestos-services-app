@@ -1,23 +1,55 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export default function BookingVerifyPage() {
   const router = useRouter();
-
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [step, setStep] = useState<"phone" | "otp">("phone");
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
-
   const normalisedPhone = phone.replace(/\D/g, "");
   const isPhoneValid = /^[6-9]\d{9}$/.test(normalisedPhone);
   const isOtpValid = /^\d{6}$/.test(otp);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkExistingSession() {
+      try {
+        const response = await fetch("/api/auth/me", {
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (cancelled) return;
+
+        if (response.ok && data.authenticated) {
+          router.replace("/booking/payment");
+          return;
+        }
+      } catch (error) {
+        console.error("Session check failed:", error);
+      }
+
+      if (!cancelled) {
+        setIsCheckingSession(false);
+      }
+    }
+
+    checkExistingSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   async function handleSendOtp() {
     setMessage("");
@@ -103,7 +135,15 @@ export default function BookingVerifyPage() {
       setIsVerifying(false);
     }
   }
-
+  if (isCheckingSession) {
+    return (
+      <div className="container-shell flex min-h-[50vh] items-center justify-center">
+        <p className="text-sm text-muted">
+          Checking your session...
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="min-h-screen bg-cream">
       <section className="bg-forest text-white">
@@ -271,13 +311,13 @@ export default function BookingVerifyPage() {
                 </p>
               )}
 
-                <button
-                  type="submit"
-                  disabled={isVerifying}
-                  className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isVerifying ? "Verifying OTP..." : "Verify and continue →"}
-                </button>
+              <button
+                type="submit"
+                disabled={isVerifying}
+                className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isVerifying ? "Verifying OTP..." : "Verify and continue →"}
+              </button>
 
               <button
                 type="button"

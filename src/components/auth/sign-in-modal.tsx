@@ -1,6 +1,7 @@
+
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type SignInModalProps = {
@@ -8,7 +9,14 @@ type SignInModalProps = {
   onClose: () => void;
 };
 
-const societies = ["Green Residency", "Palm Heights"];
+type Society = {
+  id: string;
+  name: string;
+  locality: string | null;
+  city: string | null;
+};
+
+type Step = "phone" | "otp" | "register";
 
 export default function SignInModal({
   open,
@@ -16,13 +24,50 @@ export default function SignInModal({
 }: SignInModalProps) {
   const router = useRouter();
 
-  const [step, setStep] = useState<"phone" | "otp" | "register">("phone");
+  const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [fullName, setFullName] = useState("");
-  const [society, setSociety] = useState("");
+  const [email, setEmail] = useState("");
+  const [societyId, setSocietyId] = useState("");
+
+  const [societies, setSocieties] = useState<Society[]>([]);
+  const [isLoadingSocieties, setIsLoadingSocieties] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    if (!open || step !== "register") return;
+
+    async function loadSocieties() {
+      setIsLoadingSocieties(true);
+
+      try {
+        const response = await fetch("/api/societies", {
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || "Unable to load societies.");
+        }
+
+        setSocieties(data.societies || []);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load societies."
+        );
+      } finally {
+        setIsLoadingSocieties(false);
+      }
+    }
+
+    loadSocieties();
+  }, [open, step]);
 
   if (!open) return null;
 
@@ -31,13 +76,14 @@ export default function SignInModal({
     setPhone("");
     setOtp("");
     setFullName("");
-    setSociety("");
+    setEmail("");
+    setSocietyId("");
     setError("");
     setNotice("");
     onClose();
   }
 
-  function continueWithPhone() {
+  async function sendOtp() {
     setError("");
     setNotice("");
 
@@ -46,35 +92,85 @@ export default function SignInModal({
       return;
     }
 
-    // UI demo only: replace with real account lookup later.
-    setStep("otp");
-    setNotice("Demo OTP: 123456");
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch("/api/auth/send-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({ phone }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Unable to send OTP.");
+      }
+
+      setStep("otp");
+      setNotice(
+        "If this number is registered, you will receive an OTP on WhatsApp."
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to send OTP."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
-  function verifyOtp() {
+  async function verifyOtp() {
     setError("");
-
-    if (otp !== "123456") {
-      setError("Incorrect demo OTP. Try 123456.");
-      return;
-    }
-
-    // Mock accounts for demonstrating the UI.
-    if (phone === "8888888888") {
-      router.push("/operations");
-      return;
-    }
-
-    if (phone === "9999999999") {
-      router.push("/");
-      return;
-    }
-
-    setStep("register");
     setNotice("");
+
+    if (!/^\d{6}$/.test(otp)) {
+      setError("Enter the 6-digit OTP.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch("/api/auth/verify-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({ phone, otp }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "OTP verification failed.");
+      }
+
+      if (data.requiresProfile) {
+        setStep("register");
+        setNotice("");
+        return;
+      }
+
+      // Existing customer successfully signed in.
+      resetAndClose();
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to verify OTP."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
-  function registerCustomer() {
+  async function completeRegistration() {
     setError("");
 
     if (!fullName.trim()) {
@@ -82,13 +178,50 @@ export default function SignInModal({
       return;
     }
 
-    if (!society) {
-      setError("Please choose your society.");
+    if (
+      email.trim() &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+    ) {
+      setError("Please enter a valid email address.");
       return;
     }
 
-    // Registration is not saved yet; backend integration comes later.
-    router.push("/");
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch("/api/auth/complete-profile", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim() || null,
+          preferredSocietyId: societyId || null,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data.error || "Unable to create your account."
+        );
+      }
+
+      // New customer successfully registered and signed in.
+      resetAndClose();
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to create your account."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -125,18 +258,20 @@ export default function SignInModal({
             id="sign-in-title"
             className="text-3xl font-bold tracking-tight text-[#152B25]"
           >
-            {step === "phone" && "Welcome back"}
+            {step === "phone" && "Welcome to NestOS"}
             {step === "otp" && "Verify your number"}
-            {step === "register" && "Let's get you started"}
+            {step === "register" && "Create your account"}
           </h2>
 
           <p className="mt-3 text-sm leading-6 text-[#65746B]">
             {step === "phone" &&
               "Sign in or create an account to book convenient car care at your society."}
+
             {step === "otp" &&
-              `Enter the demo OTP for +91 ${phone}.`}
+              `Enter the 6-digit OTP sent to +91 ${phone}.`}
+
             {step === "register" &&
-              "Tell us a little about yourself to set up your customer profile."}
+              "Complete your profile to get started with NestOS Services."}
           </p>
         </div>
 
@@ -145,7 +280,7 @@ export default function SignInModal({
             className="space-y-5"
             onSubmit={(event) => {
               event.preventDefault();
-              continueWithPhone();
+              sendOtp();
             }}
           >
             <div>
@@ -160,6 +295,7 @@ export default function SignInModal({
                 <span className="mr-3 border-r border-[#DCE4DC] pr-3 text-sm font-semibold text-[#52665A]">
                   +91
                 </span>
+
                 <input
                   id="sign-in-phone"
                   type="tel"
@@ -184,16 +320,12 @@ export default function SignInModal({
 
             <button
               type="submit"
-              className="flex h-14 w-full items-center justify-center rounded-full bg-[#174C3D] px-6 font-semibold text-white transition hover:bg-[#152B25]"
+              disabled={isSubmitting}
+              className="flex h-14 w-full items-center justify-center rounded-full bg-[#174C3D] px-6 font-semibold text-white transition hover:bg-[#152B25] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Continue with phone
-              <span className="ml-2">→</span>
+              {isSubmitting ? "Sending OTP..." : "Continue with phone"}
+              {!isSubmitting && <span className="ml-2">→</span>}
             </button>
-
-            <p className="text-center text-xs leading-5 text-[#7A877F]">
-              Authentication is simulated for this design preview. No SMS will
-              be sent.
-            </p>
           </form>
         )}
 
@@ -205,12 +337,6 @@ export default function SignInModal({
               verifyOtp();
             }}
           >
-            {notice && (
-              <div className="rounded-xl border border-[#D5E4D8] bg-[#E8F0E8] p-3 text-sm text-[#174C3D]">
-                {notice}
-              </div>
-            )}
-
             <div>
               <label
                 htmlFor="sign-in-otp"
@@ -225,7 +351,7 @@ export default function SignInModal({
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 maxLength={6}
-                placeholder="Enter 123456"
+                placeholder="Enter OTP"
                 value={otp}
                 onChange={(event) =>
                   setOtp(event.target.value.replace(/\D/g, ""))
@@ -233,6 +359,10 @@ export default function SignInModal({
                 className="h-14 w-full rounded-xl border border-[#DCE4DC] bg-white px-4 text-lg tracking-[0.3em] text-[#152B25] outline-none focus:border-[#174C3D]"
               />
             </div>
+
+            {notice && (
+              <p className="text-sm text-[#52665A]">{notice}</p>
+            )}
 
             {error && (
               <p role="alert" className="text-sm text-red-700">
@@ -242,13 +372,15 @@ export default function SignInModal({
 
             <button
               type="submit"
-              className="h-14 w-full rounded-full bg-[#174C3D] font-semibold text-white transition hover:bg-[#152B25]"
+              disabled={isSubmitting}
+              className="h-14 w-full rounded-full bg-[#174C3D] font-semibold text-white transition hover:bg-[#152B25] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Verify and continue
+              {isSubmitting ? "Verifying..." : "Verify and continue"}
             </button>
 
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => {
                 setStep("phone");
                 setOtp("");
@@ -267,7 +399,7 @@ export default function SignInModal({
             className="space-y-5"
             onSubmit={(event) => {
               event.preventDefault();
-              registerCustomer();
+              completeRegistration();
             }}
           >
             <div>
@@ -282,9 +414,29 @@ export default function SignInModal({
                 id="sign-up-name"
                 type="text"
                 autoComplete="name"
+                maxLength={100}
                 placeholder="Enter your full name"
                 value={fullName}
                 onChange={(event) => setFullName(event.target.value)}
+                className="h-14 w-full rounded-xl border border-[#DCE4DC] bg-white px-4 text-sm text-[#152B25] outline-none focus:border-[#174C3D]"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="sign-up-email"
+                className="mb-2 block text-sm font-semibold text-[#152B25]"
+              >
+                Email address (optional)
+              </label>
+
+              <input
+                id="sign-up-email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
                 className="h-14 w-full rounded-xl border border-[#DCE4DC] bg-white px-4 text-sm text-[#152B25] outline-none focus:border-[#174C3D]"
               />
             </div>
@@ -299,14 +451,22 @@ export default function SignInModal({
 
               <select
                 id="sign-up-society"
-                value={society}
-                onChange={(event) => setSociety(event.target.value)}
-                className="h-14 w-full rounded-xl border border-[#DCE4DC] bg-white px-4 text-sm text-[#152B25] outline-none focus:border-[#174C3D]"
+                value={societyId}
+                onChange={(event) => setSocietyId(event.target.value)}
+                disabled={isLoadingSocieties}
+                className="h-14 w-full rounded-xl border border-[#DCE4DC] bg-white px-4 text-sm text-[#152B25] outline-none focus:border-[#174C3D] disabled:opacity-60"
               >
-                <option value="">Choose your society</option>
-                {societies.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
+                <option value="">
+                  {isLoadingSocieties
+                    ? "Loading societies..."
+                    : "Select your society (optional)"}
+                </option>
+
+                {societies.map((society) => (
+                  <option key={society.id} value={society.id}>
+                    {society.name}
+                    {society.locality ? `, ${society.locality}` : ""}
+                    {society.city ? `, ${society.city}` : ""}
                   </option>
                 ))}
               </select>
@@ -329,16 +489,17 @@ export default function SignInModal({
 
             <button
               type="submit"
-              className="h-14 w-full rounded-full bg-[#174C3D] font-semibold text-white transition hover:bg-[#152B25]"
+              disabled={isSubmitting || isLoadingSocieties}
+              className="h-14 w-full rounded-full bg-[#174C3D] font-semibold text-white transition hover:bg-[#152B25] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Create account
+              {isSubmitting ? "Creating account..." : "Create account"}
             </button>
           </form>
         )}
 
         <p className="mt-7 text-center text-xs leading-5 text-[#7A877F]">
-          By continuing, you agree to use NestOS Services in accordance with
-          its terms and privacy policy.
+          By continuing, you agree to use NestOS Services in accordance
+          with its terms and privacy policy.
         </p>
       </section>
     </div>
