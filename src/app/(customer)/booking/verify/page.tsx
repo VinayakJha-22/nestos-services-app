@@ -5,6 +5,33 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+function getSafeReturnTo(value: string | null): string {
+  const fallback = "/booking/payment";
+
+  if (!value) return fallback;
+
+  try {
+    const url = new URL(value, window.location.origin);
+
+    if (url.origin !== window.location.origin) {
+      return fallback;
+    }
+
+    const allowedPaths = [
+      "/booking/payment",
+      "/packages/payment",
+    ];
+
+    if (!allowedPaths.includes(url.pathname)) {
+      return fallback;
+    }
+
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function BookingVerifyPage() {
   const router = useRouter();
   const [isCheckingSession, setIsCheckingSession] = useState(true);
@@ -32,7 +59,11 @@ export default function BookingVerifyPage() {
         if (cancelled) return;
 
         if (response.ok && data.authenticated) {
-          router.replace("/booking/payment");
+          const returnTo = getSafeReturnTo(
+            new URLSearchParams(window.location.search).get("returnTo")
+          );
+
+          router.replace(returnTo);
           return;
         }
       } catch (error) {
@@ -119,12 +150,18 @@ export default function BookingVerifyPage() {
         throw new Error(data.error || "OTP verification failed. Please try again.");
       }
 
+      const returnTo = getSafeReturnTo(
+        new URLSearchParams(window.location.search).get("returnTo")
+      );
+
       if (data.requiresProfile) {
-        router.push("/booking/profile");
+        router.push(
+          `/booking/profile?returnTo=${encodeURIComponent(returnTo)}`
+        );
         return;
       }
 
-      router.push("/booking/payment");
+      router.push(returnTo);
     } catch (error) {
       setMessage(
         error instanceof Error

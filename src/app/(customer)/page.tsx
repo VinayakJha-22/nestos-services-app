@@ -153,7 +153,7 @@ export default function HomePage() {
               </Link>
 
               <Link
-                href="/services"
+                href="/societies?next=/services"
                 className="inline-flex min-h-14 items-center justify-center rounded-full border border-border bg-white px-7 font-semibold text-ink transition hover:border-forest"
               >
                 Explore services
