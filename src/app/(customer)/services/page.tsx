@@ -13,19 +13,19 @@ export default function ServicesPage() {
   const [isCheckingSociety, setIsCheckingSociety] = useState(true);
 
   type Service = {
-  id: string;
-  name: string;
-  description: string;
-  price: number;
-  featured: boolean;
-  duration_minutes: number | null;
-};
+    id: string;
+    name: string;
+    description: string;
+    price: number;
+    featured: boolean;
+    duration_minutes: number | null;
+  };
 
-const [services, setServices] = useState<Service[]>([]);
-const [isLoadingServices, setIsLoadingServices] = useState(false);
-const [serviceError, setServiceError] = useState("");
+  const [services, setServices] = useState<Service[]>([]);
+  const [isLoadingServices, setIsLoadingServices] = useState(false);
+  const [serviceError, setServiceError] = useState("");
 
-  
+
   useEffect(() => {
     let cancelled = false;
 
@@ -35,7 +35,7 @@ const [serviceError, setServiceError] = useState("");
       );
 
       if (!savedSocietyId) {
-        router.replace("/societies");
+        router.replace("/societies?next=/services");
         return;
       }
 
@@ -72,40 +72,40 @@ const [serviceError, setServiceError] = useState("");
         }
 
         setSocietyId(selectedSociety.id);
-setSocietyName(selectedSociety.name);
-setIsCheckingSociety(false);
+        setSocietyName(selectedSociety.name);
+        setIsCheckingSociety(false);
 
-setIsLoadingServices(true);
-setServiceError("");
+        setIsLoadingServices(true);
+        setServiceError("");
 
-try {
-  const servicesResponse = await fetch(
-    `/api/services?societyId=${encodeURIComponent(selectedSociety.id)}`,
-    { cache: "no-store" }
-  );
+        try {
+          const servicesResponse = await fetch(
+            `/api/services?societyId=${encodeURIComponent(selectedSociety.id)}`,
+            { cache: "no-store" }
+          );
 
-  const servicesData = await servicesResponse.json();
+          const servicesData = await servicesResponse.json();
 
-  if (!servicesResponse.ok || !servicesData.success) {
-    throw new Error(
-      servicesData.error || "Unable to load services."
-    );
-  }
+          if (!servicesResponse.ok || !servicesData.success) {
+            throw new Error(
+              servicesData.error || "Unable to load services."
+            );
+          }
 
-  if (!cancelled) {
-    setServices(servicesData.services ?? []);
-  }
-} catch (error) {
-  console.error("Failed to load services:", error);
+          if (!cancelled) {
+            setServices(servicesData.services ?? []);
+          }
+        } catch (error) {
+          console.error("Failed to load services:", error);
 
-  if (!cancelled) {
-    setServiceError("Unable to load services. Please refresh the page.");
-  }
-} finally {
-  if (!cancelled) {
-    setIsLoadingServices(false);
-  }
-}
+          if (!cancelled) {
+            setServiceError("Unable to load services. Please refresh the page.");
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoadingServices(false);
+          }
+        }
       } catch (error) {
         console.error("Failed to verify selected society:", error);
 
@@ -139,7 +139,7 @@ try {
       <section className="bg-forest text-white">
         <div className="container-shell py-12 md:py-16">
           <Link
-            href="/societies"
+            href="/societies?next=/services"
             className="text-sm text-white/70 transition hover:text-lime"
           >
             ← Change society
@@ -204,140 +204,138 @@ try {
           </p>
         </div>
         {isLoadingServices && (
-  <p className="py-8 text-center text-sm text-muted">
-    Loading available services...
-  </p>
-)}
+          <p className="py-8 text-center text-sm text-muted">
+            Loading available services...
+          </p>
+        )}
 
-{serviceError && (
-  <p className="py-8 text-center text-sm text-red-600">
-    {serviceError}
-  </p>
-)}
+        {serviceError && (
+          <p className="py-8 text-center text-sm text-red-600">
+            {serviceError}
+          </p>
+        )}
 
-{!isLoadingServices && !serviceError && services.length === 0 && (
-  <p className="py-8 text-center text-sm text-muted">
-    No services are currently available at this society.
-  </p>
-)}
-{!isLoadingServices && !serviceError && services.length > 0 && (
-  <div className="grid gap-5 md:grid-cols-3">
-    {services.map((service, index) => (
-            <article
-              key={service.id}
-              className={`relative flex flex-col rounded-3xl border bg-white p-6 transition duration-200 hover:-translate-y-1 hover:shadow-lg ${
-                service.featured
-                  ? "border-forest ring-1 ring-forest/10"
-                  : "border-border"
-              }`}
-            >
-              {service.featured && (
-                <span className="absolute right-5 top-5 rounded-full bg-lime px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink">
-                  Popular
-                </span>
-              )}
-
-              <div className="grid size-14 place-items-center rounded-2xl bg-cream text-forest">
-                {index === 0 && (
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    className="size-7"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="m3 14 2-5a2 2 0 0 1 2-1h10a2 2 0 0 1 2 1l2 5v5h-3v-2H6v2H3v-5Z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <path
-                      d="M5 14h14M7 11h.01M17 11h.01"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                )}
-
-                {index === 1 && (
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    className="size-7"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M4 13V9a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4M3 13h18v5H3v-5Z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <path
-                      d="M6 18v2m12-2v2M7 10h10"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                )}
-
-                {index === 2 && (
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    className="size-7"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="m12 3 2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2L12 3Z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <path
-                      d="m19 16 .9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16Z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-              </div>
-
-              <h3 className="mt-6 max-w-[85%] text-xl font-bold text-ink">
-                {service.name}
-              </h3>
-
-              <p className="mt-3 min-h-[48px] text-sm leading-6 text-muted">
-                {service.description}
-              </p>
-
-              <div className="mt-6 border-t border-border pt-5">
-                <p className="text-xs text-muted">Starting at</p>
-                <p className="mt-1 text-3xl font-bold tracking-tight text-forest">
-                  ₹{service.price}
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Base service price
-                </p>
-              </div>
-
-              <div className="mt-auto pt-7">
-                <Link
-                  href={`/booking/calendar?service=${service.id}`}
-                  className={`flex min-h-12 w-full items-center justify-center gap-2 rounded-full px-5 text-sm font-semibold transition ${
-                    service.featured
-                      ? "bg-forest text-white hover:bg-ink"
-                      : "border border-border bg-white text-forest hover:border-forest hover:bg-cream"
+        {!isLoadingServices && !serviceError && services.length === 0 && (
+          <p className="py-8 text-center text-sm text-muted">
+            No services are currently available at this society.
+          </p>
+        )}
+        {!isLoadingServices && !serviceError && services.length > 0 && (
+          <div className="grid gap-5 md:grid-cols-3">
+            {services.map((service, index) => (
+              <article
+                key={service.id}
+                className={`relative flex flex-col rounded-3xl border bg-white p-6 transition duration-200 hover:-translate-y-1 hover:shadow-lg ${service.featured
+                    ? "border-forest ring-1 ring-forest/10"
+                    : "border-border"
                   }`}
-                >
-                  Choose service
-                  <span aria-hidden="true">→</span>
-                </Link>
-              </div>
-            </article>
-          ))}
-        </div>
-)}
+              >
+                {service.featured && (
+                  <span className="absolute right-5 top-5 rounded-full bg-lime px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-ink">
+                    Popular
+                  </span>
+                )}
+
+                <div className="grid size-14 place-items-center rounded-2xl bg-cream text-forest">
+                  {index === 0 && (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="size-7"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="m3 14 2-5a2 2 0 0 1 2-1h10a2 2 0 0 1 2 1l2 5v5h-3v-2H6v2H3v-5Z"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M5 14h14M7 11h.01M17 11h.01"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  )}
+
+                  {index === 1 && (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="size-7"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M4 13V9a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4M3 13h18v5H3v-5Z"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M6 18v2m12-2v2M7 10h10"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  )}
+
+                  {index === 2 && (
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="size-7"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="m12 3 2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2L12 3Z"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="m19 16 .9 2.1L22 19l-2.1.9L19 22l-.9-2.1L16 19l2.1-.9L19 16Z"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </div>
+
+                <h3 className="mt-6 max-w-[85%] text-xl font-bold text-ink">
+                  {service.name}
+                </h3>
+
+                <p className="mt-3 min-h-[48px] text-sm leading-6 text-muted">
+                  {service.description}
+                </p>
+
+                <div className="mt-6 border-t border-border pt-5">
+                  <p className="text-xs text-muted">Starting at</p>
+                  <p className="mt-1 text-3xl font-bold tracking-tight text-forest">
+                    ₹{service.price}
+                  </p>
+                  <p className="mt-1 text-xs text-muted">
+                    Base service price
+                  </p>
+                </div>
+
+                <div className="mt-auto pt-7">
+                  <Link
+                    href={`/booking/calendar?service=${service.id}`}
+                    className={`flex min-h-12 w-full items-center justify-center gap-2 rounded-full px-5 text-sm font-semibold transition ${service.featured
+                        ? "bg-forest text-white hover:bg-ink"
+                        : "border border-border bg-white text-forest hover:border-forest hover:bg-cream"
+                      }`}
+                  >
+                    Choose service
+                    <span aria-hidden="true">→</span>
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
         <p className="mt-7 text-center text-xs leading-5 text-muted">
           Final pricing will be confirmed during booking. Vehicle-related
           surcharges, where applicable, will be shown before payment.

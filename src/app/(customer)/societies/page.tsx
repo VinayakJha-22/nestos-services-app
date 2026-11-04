@@ -1,5 +1,4 @@
 
-
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -26,7 +25,6 @@ type ApiSociety = {
   is_accepting_bookings: boolean;
 };
 
-
 function statusDetails(status: Society["status"]) {
   switch (status) {
     case "accepting":
@@ -34,11 +32,13 @@ function statusDetails(status: Society["status"]) {
         label: "Accepting bookings",
         className: "bg-[#E5F3DF] text-[#245B34]",
       };
+
     case "coming-soon":
       return {
         label: "Coming soon",
         className: "bg-[#FFF0CE] text-[#76541A]",
       };
+
     default:
       return {
         label: "Not currently available",
@@ -47,9 +47,9 @@ function statusDetails(status: Society["status"]) {
   }
 }
 
-
 export default function SocietiesPage() {
   const router = useRouter();
+
   const [search, setSearch] = useState("");
   const [societies, setSocieties] = useState<Society[]>([]);
   const [loading, setLoading] = useState(true);
@@ -100,7 +100,6 @@ export default function SocietiesPage() {
     loadSocieties();
   }, []);
 
-
   const filteredSocieties = useMemo(() => {
     const term = search.trim().toLowerCase();
 
@@ -114,16 +113,26 @@ export default function SocietiesPage() {
         society.city,
       ].some((value) => value.toLowerCase().includes(term)),
     );
-    }, [search, societies]);
+  }, [search, societies]);
 
   function selectSociety(society: Society) {
     if (society.status !== "accepting") return;
 
-    // Temporary selection persistence for UI development.
-    // Booking eligibility must be revalidated by the backend later.
+    // Save the selected society for both customer journeys.
     sessionStorage.setItem("nestos-selected-society", society.id);
 
-    router.push("/services");
+    // Read the intended journey from the URL.
+    // Only allow the known customer destinations.
+    const requestedPath = new URLSearchParams(
+      window.location.search,
+    ).get("next");
+
+    const destination =
+      requestedPath === "/packages/catalogue"
+        ? "/packages/catalogue"
+        : "/services";
+
+    router.push(destination);
   }
 
   return (
@@ -206,6 +215,7 @@ export default function SocietiesPage() {
             <h2 className="text-xl font-bold text-ink sm:text-2xl">
               Available locations
             </h2>
+
             <p className="mt-2 text-sm text-muted">
               {filteredSocieties.length}{" "}
               {filteredSocieties.length === 1 ? "location" : "locations"} found
@@ -218,24 +228,28 @@ export default function SocietiesPage() {
         </div>
 
         {loading ? (
-  <div className="mt-8 rounded-[24px] border border-border bg-white px-5 py-14 text-center">
-    <p className="text-sm text-muted">Loading available societies...</p>
-  </div>
-) : loadError ? (
-  <div className="mt-8 rounded-[24px] border border-border bg-white px-5 py-14 text-center">
-    <h3 className="text-lg font-bold text-ink">
-      Unable to load locations
-    </h3>
-    <p className="mt-2 text-sm text-muted">{loadError}</p>
-    <button
-      type="button"
-      onClick={() => window.location.reload()}
-      className="mt-5 rounded-full bg-forest px-6 py-3 text-sm font-semibold text-white hover:bg-ink"
-    >
-      Try again
-    </button>
-  </div>
-) : filteredSocieties.length > 0 ? (
+          <div className="mt-8 rounded-[24px] border border-border bg-white px-5 py-14 text-center">
+            <p className="text-sm text-muted">
+              Loading available societies...
+            </p>
+          </div>
+        ) : loadError ? (
+          <div className="mt-8 rounded-[24px] border border-border bg-white px-5 py-14 text-center">
+            <h3 className="text-lg font-bold text-ink">
+              Unable to load locations
+            </h3>
+
+            <p className="mt-2 text-sm text-muted">{loadError}</p>
+
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-5 rounded-full bg-forest px-6 py-3 text-sm font-semibold text-white hover:bg-ink"
+            >
+              Try again
+            </button>
+          </div>
+        ) : filteredSocieties.length > 0 ? (
           <div className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {filteredSocieties.map((society) => {
               const status = statusDetails(society.status);
@@ -299,6 +313,7 @@ export default function SocietiesPage() {
                         strokeWidth="1.7"
                       />
                     </svg>
+
                     {society.locality}, {society.city}
                   </div>
 
@@ -314,7 +329,10 @@ export default function SocietiesPage() {
                       }`}
                     >
                       {accepting ? "Select this society" : "Not available yet"}
-                      {accepting && <span aria-hidden="true">→</span>}
+
+                      {accepting && (
+                        <span aria-hidden="true">→</span>
+                      )}
                     </button>
                   </div>
                 </article>
@@ -326,10 +344,12 @@ export default function SocietiesPage() {
             <h3 className="text-lg font-bold text-ink">
               No matching societies found
             </h3>
+
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted">
               Try another society name or locality. You can also clear your
               search to view all sample locations.
             </p>
+
             <button
               type="button"
               onClick={() => setSearch("")}
@@ -341,8 +361,9 @@ export default function SocietiesPage() {
         )}
 
         <p className="mt-8 rounded-2xl border border-border bg-white p-4 text-xs leading-5 text-muted">
-          Only societies currently accepting bookings are shown. Booking eligibility
-and slot availability will be checked again during the booking process.
+          Only societies currently accepting bookings are shown. Booking
+          eligibility and slot availability will be checked again during the
+          booking process.
         </p>
       </section>
     </div>
