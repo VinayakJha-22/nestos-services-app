@@ -14,6 +14,33 @@ type Society = {
     is_accepting_bookings: boolean;
 };
 
+function getSafeReturnTo(value: string | null): string {
+    const fallback = "/booking/payment";
+
+    if (!value) return fallback;
+
+    try {
+        const url = new URL(value, window.location.origin);
+
+        if (url.origin !== window.location.origin) {
+            return fallback;
+        }
+
+        const allowedPaths = [
+            "/booking/payment",
+            "/packages/payment",
+        ];
+
+        if (!allowedPaths.includes(url.pathname)) {
+            return fallback;
+        }
+
+        return `${url.pathname}${url.search}`;
+    } catch {
+        return fallback;
+    }
+}
+
 export default function ProfilePage() {
     const router = useRouter();
 
@@ -121,7 +148,11 @@ export default function ProfilePage() {
                 throw new Error(data.error || "Unable to create your account.");
             }
 
-            router.push("/booking/payment");
+            const returnTo = getSafeReturnTo(
+                new URLSearchParams(window.location.search).get("returnTo")
+            );
+
+            router.push(returnTo);
             router.refresh();
         } catch (err) {
             setError(
