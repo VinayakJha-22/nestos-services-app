@@ -217,6 +217,308 @@ export async function POST(request: NextRequest) {
     const razorpayOrderId = payment.order_id!;
     const razorpayPaymentId = payment.id!;
 
+    
+    // 8. First check whether this is a booking payment.
+    const bookingPaymentResult = await client.query(
+      `SELECT
+         po.id AS payment_order_id,
+         po.booking_id,
+         po.amount_paise,
+         po.currency,
+         po.status AS payment_order_status,
+         po.razorpay_payment_id AS existing_payment_id,
+         b.booking_status,
+         b.payment_status
+       FROM public.booking_payment_orders po
+       INNER JOIN public.bookings b
+         ON b.id = po.booking_id
+       WHERE po.razorpay_order_id = $1
+       FOR UPDATE OF po, b`,
+      [razorpayOrderId]
+    );
+
+    if (bookingPaymentResult.rows.length > 0) {
+      const bookingPayment = bookingPaymentResult.rows[0];
+
+      // 9. Validate the captured amount and currency.
+      if (
+        Number(payment.amount) !== Number(bookingPayment.amount_paise) ||
+        String(payment.currency).trim().toUpperCase() !==
+          String(bookingPayment.currency).trim().toUpperCase()
+      ) {
+        await client.query(
+          `UPDATE public.razorpay_webhook_events
+           SET processing_status = 'failed',
+               error_message = 'Booking payment amount or currency mismatch.'
+           WHERE event_id = $1`,
+          [eventId]
+        );
+
+        await client.query("COMMIT");
+
+        return NextResponse.json({
+          success: true,
+          ignored: true,
+        });
+      }
+
+      // 10. Handle duplicate payment notifications safely.
+      if (bookingPayment.payment_order_status === "paid") {
+        if (
+          bookingPayment.existing_payment_id !== razorpayPaymentId
+        ) {
+          await client.query(
+            `UPDATE public.razorpay_webhook_events
+             SET processing_status = 'failed',
+                 error_message = 'Booking payment order already paid with another payment.'
+             WHERE event_id = $1`,
+            [eventId]
+          );
+
+          await client.query("COMMIT");
+
+          return NextResponse.json({
+            success: true,
+            ignored: true,
+          });
+        }
+
+        await client.query(
+          `UPDATE public.razorpay_webhook_events
+           SET processing_status = 'processed',
+               processed_at = NOW(),
+               error_message = NULL
+           WHERE event_id = $1`,
+          [eventId]
+        );
+
+        await client.query("COMMIT");
+
+        return NextResponse.json({
+          success: true,
+          alreadyProcessed: true,
+          bookingId: bookingPayment.booking_id,
+        });
+      }
+
+      // Do not process an order that is no longer pending.
+      if (bookingPayment.payment_order_status !== "pending_payment") {
+        await client.query(
+          `UPDATE public.razorpay_webhook_events
+           SET processing_status = 'processed',
+               processed_at = NOW(),
+               error_message = NULL
+           WHERE event_id = $1`,
+          [eventId]
+        );
+
+        await client.query("COMMIT");
+
+        return NextResponse.json({
+          success: true,
+          ignored: true,
+        });
+      }
+
+      // 11. Lock and validate the temporary reservation.
+      const reservationResult = await client.query(
+        `SELECT
+           id,
+           status,
+           expires_at,
+           (
+             status = 'active'
+             AND expires_at > NOW()
+           ) AS is_valid
+         FROM public.booking_slot_reservations
+         WHERE booking_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [bookingPayment.booking_id]
+      );
+
+      const reservation = reservationResult.rows[0];
+
+      const reservationValid =
+        bookingPayment.booking_status === "pending_payment" &&
+        bookingPayment.payment_status === "pending" &&
+        reservation?.is_valid === true;
+
+      // 12. Late payment: payment was captured, but the slot
+      // is no longer reserved. Never confirm this booking.
+      if (!reservationValid) {
+        const paymentUpdate = await client.query(
+          `UPDATE public.booking_payment_orders
+           SET status = 'refund_pending',
+               razorpay_payment_id = $1,
+               paid_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $2
+             AND status = 'pending_payment'`,
+          [razorpayPaymentId, bookingPayment.payment_order_id]
+        );
+
+        if (paymentUpdate.rowCount !== 1) {
+          throw new Error(
+            "Unable to flag late booking payment for refund."
+          );
+        }
+
+        await client.query(
+          `UPDATE public.bookings
+           SET payment_status = 'refund_pending',
+               booking_status = CASE
+                 WHEN booking_status = 'pending_payment'
+                   THEN 'expired'
+                 ELSE booking_status
+               END,
+               updated_at = NOW()
+           WHERE id = $1
+             AND payment_status = 'pending'`,
+          [bookingPayment.booking_id]
+        );
+
+        if (bookingPayment.booking_status === "pending_payment") {
+          await client.query(
+            `INSERT INTO public.booking_status_history (
+               booking_id,
+               previous_status,
+               new_status,
+               changed_by_type,
+               notes
+             )
+             VALUES (
+               $1,
+               'pending_payment',
+               'expired',
+               'system',
+               'Payment captured after temporary reservation expired; refund handling required'
+             )`,
+            [bookingPayment.booking_id]
+          );
+        }
+
+        if (reservation?.status === "active") {
+          await client.query(
+            `UPDATE public.booking_slot_reservations
+             SET status = 'expired',
+                 released_at = NOW()
+             WHERE id = $1
+               AND status = 'active'`,
+            [reservation.id]
+          );
+        }
+
+        await client.query(
+          `UPDATE public.razorpay_webhook_events
+           SET processing_status = 'processed',
+               processed_at = NOW(),
+               error_message = NULL
+           WHERE event_id = $1`,
+          [eventId]
+        );
+
+        await client.query("COMMIT");
+
+        return NextResponse.json({
+          success: true,
+          bookingId: bookingPayment.booking_id,
+          refundRequired: true,
+          message: "Payment captured after reservation expiry. Booking was not confirmed.",
+        });
+      }
+
+      // 13. Confirm the valid booking payment.
+      const paymentUpdate = await client.query(
+        `UPDATE public.booking_payment_orders
+         SET status = 'paid',
+             razorpay_payment_id = $1,
+             paid_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $2
+           AND status = 'pending_payment'`,
+        [razorpayPaymentId, bookingPayment.payment_order_id]
+      );
+
+      if (paymentUpdate.rowCount !== 1) {
+        throw new Error("Unable to mark booking payment as paid.");
+      }
+
+      const bookingUpdate = await client.query(
+        `UPDATE public.bookings
+         SET booking_status = 'confirmed',
+             payment_status = 'paid',
+             confirmed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1
+           AND booking_status = 'pending_payment'
+           AND payment_status = 'pending'`,
+        [bookingPayment.booking_id]
+      );
+
+      if (bookingUpdate.rowCount !== 1) {
+        throw new Error("Unable to confirm booking.");
+      }
+
+      const reservationUpdate = await client.query(
+        `UPDATE public.booking_slot_reservations
+         SET status = 'converted',
+             converted_at = NOW()
+         WHERE id = $1
+           AND status = 'active'
+           AND expires_at > NOW()`,
+        [reservation.id]
+      );
+
+      if (reservationUpdate.rowCount !== 1) {
+        throw new Error(
+          "Unable to convert booking reservation."
+        );
+      }
+
+      // 14. Record the booking status transition.
+      await client.query(
+        `INSERT INTO public.booking_status_history (
+           booking_id,
+           previous_status,
+           new_status,
+           changed_by_type,
+           notes
+         )
+         VALUES (
+           $1,
+           'pending_payment',
+           'confirmed',
+           'system',
+           'Booking confirmed after verified Razorpay payment'
+         )`,
+        [bookingPayment.booking_id]
+      );
+
+      // 15. Mark webhook event processed in the same transaction.
+      await client.query(
+        `UPDATE public.razorpay_webhook_events
+         SET processing_status = 'processed',
+             processed_at = NOW(),
+             error_message = NULL
+         WHERE event_id = $1`,
+        [eventId]
+      );
+
+      await client.query("COMMIT");
+
+      return NextResponse.json({
+        success: true,
+        bookingId: bookingPayment.booking_id,
+        bookingConfirmed: true,
+      });
+    }
+
+    // Not a booking payment: continue into the existing
+    // package purchase webhook flow below.
+
+
     // 8. Find and lock the matching local purchase order.
     const purchaseResult = await client.query(
       `SELECT *
