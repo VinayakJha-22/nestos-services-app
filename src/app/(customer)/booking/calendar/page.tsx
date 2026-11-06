@@ -50,6 +50,21 @@ type Service = {
   duration_minutes: number | null;
 };
 
+type PackageServiceEligibility = {
+  serviceId: string;
+  creditCost: number;
+  availableCredits: number;
+  canRedeem: boolean;
+  packageName: string | null;
+};
+
+type PackageEligibilityResponse = {
+  success: boolean;
+  societyId: string;
+  hasActivePackage: boolean;
+  services: PackageServiceEligibility[];
+};
+
 export default function BookingCalendarPage() {
   const router = useRouter();
 
@@ -70,6 +85,8 @@ export default function BookingCalendarPage() {
   >([]);
   const [durationMinutes, setDurationMinutes] = useState(0);
   const [isLoadingAvailability, setIsLoadingAvailability] = useState(true);
+  const [packageEligibility, setPackageEligibility] =
+    useState<PackageEligibilityResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +139,28 @@ export default function BookingCalendarPage() {
         if (!selectedSociety || !selectedService) {
           router.replace(selectedSociety ? "/services" : "/societies");
           return;
+        }
+
+        // Load package eligibility for this customer and selected society.
+        // If the customer is a guest or has no eligible package,
+        // normal one-time pricing will remain available.
+        let eligibilityData: PackageEligibilityResponse | null = null;
+
+        try {
+          const eligibilityResponse = await fetch(
+            `/api/packages/eligibility?societyId=${encodeURIComponent(
+              selectedSociety.id
+            )}`,
+            { cache: "no-store" }
+          );
+
+          const responseData = await eligibilityResponse.json();
+
+          if (eligibilityResponse.ok && responseData.success) {
+            eligibilityData = responseData as PackageEligibilityResponse;
+          }
+        } catch (error) {
+          console.error("Unable to load package eligibility:", error);
         }
 
         const availabilityResponse = await fetch(
@@ -181,8 +220,7 @@ export default function BookingCalendarPage() {
           setServiceId(selectedService.id);
           setSocietyId(selectedSociety.id);
           setSocietyName(selectedSociety.name);
-
-
+          setPackageEligibility(eligibilityData);
           setIsReady(true);
         }
       } catch (error) {
@@ -210,8 +248,21 @@ export default function BookingCalendarPage() {
 
 
 
-  const vehicleSurcharge = vehicle === "SUV" ? 100 : 0;
+  const packageService = packageEligibility?.services.find(
+    (item) => item.serviceId === service?.id
+  );
+
+  const canUsePackageCredits =
+    packageEligibility?.hasActivePackage === true &&
+    packageService?.canRedeem === true;
+
   const servicePrice = Number(service?.price ?? 0);
+
+  // SUV surcharge applies only to regular one-time bookings.
+  // Eligible prepaid package redemptions have no vehicle surcharge.
+  const vehicleSurcharge =
+    !canUsePackageCredits && vehicle === "SUV" ? 100 : 0;
+
   const totalPrice = servicePrice + vehicleSurcharge;
 
   const slotsForSelectedDate =
@@ -407,7 +458,12 @@ export default function BookingCalendarPage() {
                   [
                     { name: "Hatchback", detail: "No surcharge" },
                     { name: "Sedan", detail: "No surcharge" },
-                    { name: "SUV", detail: "+₹100 surcharge" },
+                    {
+                      name: "SUV",
+                      detail: canUsePackageCredits
+                        ? "No surcharge with package credits"
+                        : "+₹100 surcharge",
+                    },
                   ] as const
                 ).map((item) => (
                   <button
@@ -479,28 +535,71 @@ export default function BookingCalendarPage() {
             </div>
 
             <div className="mt-6 border-t border-border pt-5">
-              <div className="flex justify-between gap-3 text-sm">
-                <span className="text-muted">Service price</span>
-                <span className="font-medium text-ink">
-                  ₹{service.price}
-                </span>
-              </div>
+              {canUsePackageCredits ? (
+                <>
+                  <p className="text-sm text-muted">Package redemption</p>
 
-              <div className="mt-3 flex justify-between gap-3 text-sm">
-                <span className="text-muted">Vehicle surcharge</span>
-                <span className="font-medium text-ink">
-                  ₹{vehicleSurcharge}
-                </span>
-              </div>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <span className="font-semibold text-ink">
+                      Credits required
+                    </span>
 
-              <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
-                <span className="font-semibold text-ink">
-                  Total
-                </span>
-                <span className="text-2xl font-bold text-forest">
-                  ₹{totalPrice}
-                </span>
-              </div>
+                    <span className="text-2xl font-bold text-forest">
+                      {packageService.creditCost} credits
+                    </span>
+                  </div>
+
+                  <p className="mt-2 text-xs text-muted">
+                    Available credits: {packageService.availableCredits}
+                  </p>
+
+                  {packageService.packageName && (
+                    <p className="mt-1 text-xs text-muted">
+                      Package: {packageService.packageName}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between gap-3 text-sm">
+                    <span className="text-muted">Service price</span>
+                    <span className="font-medium text-ink">
+                      ₹{servicePrice}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 flex justify-between gap-3 text-sm">
+                    <span className="text-muted">Vehicle surcharge</span>
+                    <span className="font-medium text-ink">
+                      ₹{vehicleSurcharge}
+                    </span>
+                  </div>
+
+                  <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
+                    <span className="font-semibold text-ink">
+                      Total
+                    </span>
+                    <span className="text-2xl font-bold text-forest">
+                      ₹{totalPrice}
+                    </span>
+                  </div>
+
+                  {packageEligibility?.hasActivePackage &&
+                    packageService &&
+                    !packageService.canRedeem && (
+                      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                        <p className="text-sm font-semibold text-amber-900">
+                          Not enough package credits
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-amber-800">
+                          You have {packageService.availableCredits} credits
+                          available, but this wash requires {packageService.creditCost}.
+                          You can continue and pay normally.
+                        </p>
+                      </div>
+                    )}
+                </>
+              )}
             </div>
 
             <button

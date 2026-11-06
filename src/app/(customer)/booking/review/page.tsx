@@ -31,6 +31,21 @@ type Society = {
   city: string;
 };
 
+type PackageServiceEligibility = {
+  serviceId: string;
+  creditCost: number;
+  availableCredits: number;
+  canRedeem: boolean;
+  packageName: string | null;
+};
+
+type PackageEligibilityResponse = {
+  success: boolean;
+  societyId: string;
+  hasActivePackage: boolean;
+  services: PackageServiceEligibility[];
+};
+
 function formatBookingDate(value: string) {
   const parts = value.split("-").map(Number);
 
@@ -60,6 +75,8 @@ export default function BookingReviewPage() {
   const [society, setSociety] = useState<Society | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [packageEligibility, setPackageEligibility] =
+    useState<PackageEligibilityResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,10 +146,29 @@ export default function BookingReviewPage() {
           return;
         }
 
+        let eligibilityData: PackageEligibilityResponse | null = null;
+
+        try {
+          const eligibilityResponse = await fetch(
+            `/api/packages/eligibility?societyId=${encodeURIComponent(
+              selectedSociety.id
+            )}`,
+            { cache: "no-store" }
+          );
+
+          const responseData = await eligibilityResponse.json();
+
+          if (eligibilityResponse.ok && responseData.success) {
+            eligibilityData = responseData as PackageEligibilityResponse;
+          }
+        } catch (error) {
+          console.error("Unable to load package eligibility:", error);
+        }
+
         if (!cancelled) {
           setDraft(parsed as BookingDraft);
           setSociety(selectedSociety);
-
+          setPackageEligibility(eligibilityData);
           setService({
             ...selectedService,
             price: Number(selectedService.price),
@@ -184,8 +220,19 @@ export default function BookingReviewPage() {
 
   // Displayed price is recalculated from configured service data.
   // The backend must independently validate the final price.
-  const servicePrice = parseFloat(String(service.price));
-  const vehicleSurcharge = draft.vehicle === "SUV" ? 100 : 0;
+  const packageService = packageEligibility?.services.find(
+    (item) => item.serviceId === service.id
+  );
+
+  const canUsePackageCredits =
+    packageEligibility?.hasActivePackage === true &&
+    packageService?.canRedeem === true;
+
+  const servicePrice = Number(service.price);
+
+  // SUV surcharge applies only to regular one-time bookings.
+  const vehicleSurcharge =
+    !canUsePackageCredits && draft.vehicle === "SUV" ? 100 : 0;
 
   const totalPrice =
     Math.round((servicePrice + vehicleSurcharge) * 100) / 100;
@@ -351,23 +398,92 @@ export default function BookingReviewPage() {
               Price breakdown
             </h2>
 
-            <div className="mt-6 space-y-4 text-sm">
-              <div className="flex items-start justify-between gap-4">
-                <span className="text-muted">{service.name}</span>
-                <span className="font-medium text-ink">
-                  ₹{servicePrice.toFixed(2)}
-                </span>
-              </div>
+            {canUsePackageCredits ? (
+              <div className="mt-6 space-y-4">
+                <div className="rounded-2xl border border-forest/20 bg-forest/5 p-4">
+                  <p className="text-sm font-semibold text-forest">
+                    Prepaid package redemption
+                  </p>
 
-              <div className="flex items-start justify-between gap-4">
-                <span className="text-muted">
-                  {draft.vehicle} surcharge
-                </span>
-                <span className="font-medium text-ink">
-                  ₹{vehicleSurcharge.toFixed(2)}
-                </span>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <span className="text-sm text-muted">
+                      Credits required
+                    </span>
+
+                    <span className="text-2xl font-bold text-forest">
+                      {packageService.creditCost} credits
+                    </span>
+                  </div>
+
+                  <p className="mt-2 text-xs text-muted">
+                    Available credits: {packageService.availableCredits}
+                  </p>
+
+                  {packageService.packageName && (
+                    <p className="mt-1 text-xs text-muted">
+                      Package: {packageService.packageName}
+                    </p>
+                  )}
+                </div>
+
+                <p className="text-xs leading-5 text-muted">
+                  This booking can be covered by your prepaid package.
+                  No vehicle surcharge applies to package redemption.
+                </p>
               </div>
-            </div>
+            ) : (
+              <>
+                <div className="mt-6 space-y-4 text-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted">{service.name}</span>
+                    <span className="font-medium text-ink">
+                      ₹{servicePrice.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-4">
+                    <span className="text-muted">
+                      {draft.vehicle} surcharge
+                    </span>
+                    <span className="font-medium text-ink">
+                      ₹{vehicleSurcharge.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-6 border-t border-border pt-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="font-semibold text-ink">
+                      Total payable
+                    </span>
+
+                    <span className="text-3xl font-bold text-forest">
+                      ₹{totalPrice.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <p className="mt-2 text-xs leading-5 text-muted">
+                    Final amount is subject to server-side validation.
+                  </p>
+                </div>
+
+                {packageEligibility?.hasActivePackage &&
+                  packageService &&
+                  !packageService.canRedeem && (
+                    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-sm font-semibold text-amber-900">
+                        Not enough package credits
+                      </p>
+
+                      <p className="mt-1 text-xs leading-5 text-amber-800">
+                        You have {packageService.availableCredits} credits
+                        available, but this wash requires {packageService.creditCost}.
+                        You can continue and pay normally.
+                      </p>
+                    </div>
+                  )}
+              </>
+            )}
 
             <div className="mt-6 border-t border-border pt-5">
               <div className="flex items-center justify-between gap-4">
