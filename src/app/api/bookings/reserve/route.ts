@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
   let client;
 
   try {
-    // 1. Validate customer session
+    // 1. Validate customer session.
     const cookieStore = await cookies();
     const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
 
     const customer = customerResult.rows[0];
 
-    // 2. Validate request
+    // 2. Validate request.
     const body = await request.json();
 
     const societyId = body.societyId;
@@ -87,6 +87,7 @@ export async function POST(request: NextRequest) {
     const bookingDate = body.date;
     const startTime = body.time;
     const vehicleType = body.vehicleType;
+
     const vehicleDetails =
       typeof body.vehicleDetails === "string"
         ? body.vehicleDetails.trim()
@@ -109,10 +110,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (
-      vehicleDetails !== null &&
-      vehicleDetails.length > 500
-    ) {
+    if (vehicleDetails !== null && vehicleDetails.length > 500) {
       return NextResponse.json(
         { success: false, error: "Vehicle details are too long." },
         { status: 400 },
@@ -121,7 +119,7 @@ export async function POST(request: NextRequest) {
 
     const normalizedServiceId = serviceId.trim();
 
-    const [hours, minutes] = startTime.split(":").map(Number);
+    const [, minutes] = startTime.split(":").map(Number);
 
     if (minutes % SLOT_INTERVAL_MINUTES !== 0) {
       return NextResponse.json(
@@ -298,8 +296,7 @@ export async function POST(request: NextRequest) {
 
       const owner = ownerResult.rows[0];
 
-      // 8. Expire old reservations for this society/date.
-      // Also expire their pending bookings and record the transition.
+      // 8. Expire old reservations and their pending bookings.
       await client.query(
         `WITH expired_reservations AS (
            UPDATE public.booking_slot_reservations
@@ -378,8 +375,6 @@ export async function POST(request: NextRequest) {
         const occupancyResult = await client.query(
           `SELECT COUNT(DISTINCT busy.booking_id)::int AS occupied
            FROM (
-             -- Confirmed and operational bookings, including
-             -- standalone bookings created outside customer checkout.
              SELECT
                b.id AS booking_id,
                b.start_time,
@@ -395,8 +390,6 @@ export async function POST(request: NextRequest) {
 
              UNION ALL
 
-             -- Active, unexpired holds for pending payments,
-             -- and converted reservations for confirmed bookings.
              SELECT
                r.booking_id,
                r.start_time,
@@ -451,15 +444,9 @@ export async function POST(request: NextRequest) {
       }
 
       // 10. Calculate price on the server.
-      const basePricePaise = Math.round(
-        Number(config.base_price) * 100,
-      );
-
-      const vehicleSurchargePaise =
-        vehicleType === "suv" ? 10000 : 0;
-
-      const totalAmountPaise =
-        basePricePaise + vehicleSurchargePaise;
+      const basePricePaise = Math.round(Number(config.base_price) * 100);
+      const vehicleSurchargePaise = vehicleType === "suv" ? 10000 : 0;
+      const totalAmountPaise = basePricePaise + vehicleSurchargePaise;
 
       if (
         !Number.isSafeInteger(basePricePaise) ||
@@ -470,19 +457,65 @@ export async function POST(request: NextRequest) {
       }
 
       const basePrice = (basePricePaise / 100).toFixed(2);
-      const vehicleSurcharge = (
-        vehicleSurchargePaise / 100
-      ).toFixed(2);
-      const totalAmount = (
-        totalAmountPaise / 100
-      ).toFixed(2);
+      const vehicleSurcharge = (vehicleSurchargePaise / 100).toFixed(2);
+      const totalAmount = (totalAmountPaise / 100).toFixed(2);
 
-      // 11. Create the pending booking with owner snapshot.
+      // 11. Find and lock the earliest-expiring eligible subscription.
+      const subscriptionResult = await client.query(
+        `SELECT
+           cs.id AS subscription_id,
+           cs.credits_remaining,
+           cs.expires_at,
+           psc.credit_cost
+         FROM public.customer_subscriptions cs
+         INNER JOIN public.packages p
+           ON p.id = cs.package_id
+         INNER JOIN public.society_packages sp
+           ON sp.society_id = cs.society_id
+          AND sp.package_id = cs.package_id
+         INNER JOIN public.package_service_credit_costs psc
+           ON psc.service_id = $3
+         WHERE cs.customer_id = $1
+           AND cs.society_id = $2
+           AND cs.status = 'active'
+           AND cs.starts_at <= NOW()
+           AND cs.expires_at > NOW()
+           AND cs.credits_remaining >= psc.credit_cost
+           AND p.is_active = TRUE
+           AND sp.is_available = TRUE
+         ORDER BY cs.expires_at ASC, cs.created_at ASC
+         LIMIT 1
+         FOR UPDATE OF cs`,
+        [customer.id, societyId, normalizedServiceId],
+      );
+
+      const prepaidSubscription =
+        subscriptionResult.rows[0] ?? null;
+
+      const isPrepaid = Boolean(prepaidSubscription);
+      const creditCost = isPrepaid
+        ? Number(prepaidSubscription.credit_cost)
+        : 0;
+
+      const bookingStatus = isPrepaid
+        ? "confirmed"
+        : "pending_payment";
+
+      const paymentMethod = isPrepaid
+        ? "prepaid"
+        : "one_time";
+
+      const paymentStatus = isPrepaid
+        ? "not_required"
+        : "pending";
+
+      // 12. Create the booking.
       const bookingResult = await client.query(
         `INSERT INTO public.bookings (
            customer_id,
            society_id,
            service_id,
+           subscription_id,
            society_name_snapshot,
            service_name_snapshot,
            booking_date,
@@ -498,21 +531,24 @@ export async function POST(request: NextRequest) {
            payment_method,
            payment_status,
            booking_source,
+           confirmed_at,
            responsible_party_type,
            responsible_party_reference,
            responsible_party_name_snapshot
          )
          VALUES (
-           $1, $2, $3, $4, $5, $6, $7::time, $8::time,
-           $9, $10, $11, $12, $13, 'INR',
-           'pending_payment', 'one_time', 'pending', 'customer',
-           $14, $15, $16
+           $1, $2, $3, $4, $5, $6, $7, $8::time, $9::time,
+           $10, $11, $12, $13, $14, 'INR',
+           $15, $16, $17, 'customer',
+           CASE WHEN $15 = 'confirmed' THEN NOW() ELSE NULL END,
+           $18, $19, $20
          )
          RETURNING id, booking_reference`,
         [
           customer.id,
           societyId,
           normalizedServiceId,
+          prepaidSubscription?.subscription_id ?? null,
           config.society_name,
           config.service_name,
           bookingDate,
@@ -523,6 +559,9 @@ export async function POST(request: NextRequest) {
           basePrice,
           vehicleSurcharge,
           totalAmount,
+          bookingStatus,
+          paymentMethod,
+          paymentStatus,
           owner.responsible_party_type,
           owner.responsible_party_reference,
           owner.responsible_party_name_snapshot,
@@ -531,7 +570,7 @@ export async function POST(request: NextRequest) {
 
       const booking = bookingResult.rows[0];
 
-      // 12. Record initial booking status.
+      // 13. Record the initial booking status.
       await client.query(
         `INSERT INTO public.booking_status_history (
            booking_id,
@@ -541,18 +580,18 @@ export async function POST(request: NextRequest) {
            changed_by_reference,
            notes
          )
-         VALUES (
-           $1,
-           NULL,
-           'pending_payment',
-           'customer',
-           $2,
-           'Customer booking reservation created'
-         )`,
-        [booking.id, customer.id],
+         VALUES ($1, NULL, $2, 'customer', $3, $4)`,
+        [
+          booking.id,
+          bookingStatus,
+          customer.id,
+          isPrepaid
+            ? "Booking confirmed using prepaid package credits"
+            : "Customer booking reservation created",
+        ],
       );
 
-      // 13. Record booking-level owner assignment history.
+      // 14. Record booking-level owner assignment history.
       await client.query(
         `INSERT INTO public.booking_owner_assignment_history (
            booking_id,
@@ -575,7 +614,9 @@ export async function POST(request: NextRequest) {
         ],
       );
 
-      // 14. Create the temporary capacity reservation.
+      // 15. Create the slot reservation.
+      // Prepaid bookings are converted immediately; one-time bookings
+      // remain active until payment is completed.
       const reservationResult = await client.query(
         `INSERT INTO public.booking_slot_reservations (
            booking_id,
@@ -585,17 +626,18 @@ export async function POST(request: NextRequest) {
            start_time,
            end_time,
            status,
-           expires_at
+           expires_at,
+           converted_at
          )
          VALUES (
-           $1,
-           $2,
-           $3,
-           $4,
-           $5::time,
-           $6::time,
-           'active',
-           NOW() + ($7::int * INTERVAL '1 minute')
+           $1, $2, $3, $4, $5::time, $6::time,
+           $7,
+           CASE
+             WHEN $7 = 'active'
+             THEN NOW() + ($8::int * INTERVAL '1 minute')
+             ELSE NOW() + INTERVAL '100 years'
+           END,
+           CASE WHEN $7 = 'converted' THEN NOW() ELSE NULL END
          )
          RETURNING expires_at`,
         [
@@ -605,11 +647,67 @@ export async function POST(request: NextRequest) {
           bookingDate,
           startTime,
           endTime,
+          isPrepaid ? "converted" : "active",
           config.reservation_expiry_minutes,
         ],
       );
 
       const expiresAt = reservationResult.rows[0].expires_at;
+
+      // 16. Deduct prepaid credits and record the ledger debit.
+      if (isPrepaid && prepaidSubscription) {
+        const debitResult = await client.query(
+          `UPDATE public.customer_subscriptions
+           SET credits_remaining = credits_remaining - $2,
+               status = CASE
+                 WHEN credits_remaining - $2 = 0
+                 THEN 'exhausted'
+                 ELSE 'active'
+               END,
+               updated_at = NOW()
+           WHERE id = $1
+             AND credits_remaining >= $2
+           RETURNING credits_remaining`,
+          [
+            prepaidSubscription.subscription_id,
+            creditCost,
+          ],
+        );
+
+        if (debitResult.rows.length !== 1) {
+          throw new Error(
+            "Unable to deduct package credits. Please try again.",
+          );
+        }
+
+        await client.query(
+          `INSERT INTO public.subscription_credit_ledger (
+             subscription_id,
+             entry_type,
+             credits_delta,
+             reference_type,
+             reference_id,
+             idempotency_key,
+             notes
+           )
+           VALUES (
+             $1,
+             'booking_redemption',
+             $2,
+             'booking',
+             $3,
+             $4,
+             $5
+           )`,
+          [
+            prepaidSubscription.subscription_id,
+            -creditCost,
+            booking.id,
+            `booking-redemption:${booking.id}`,
+            `Redeemed ${creditCost} package credit(s) for ${normalizedServiceId}`,
+          ],
+        );
+      }
 
       await client.query("COMMIT");
 
@@ -617,7 +715,14 @@ export async function POST(request: NextRequest) {
         success: true,
         bookingId: booking.id,
         bookingReference: booking.booking_reference,
-        reservationExpiresAt: expiresAt,
+        paymentRequired: !isPrepaid,
+        paymentMethod,
+        paymentStatus,
+        creditsUsed: creditCost,
+        creditsRemaining: isPrepaid
+          ? Number(prepaidSubscription.credits_remaining) - creditCost
+          : null,
+        reservationExpiresAt: isPrepaid ? null : expiresAt,
         societyName: config.society_name,
         serviceName: config.service_name,
         date: bookingDate,

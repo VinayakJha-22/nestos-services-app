@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -95,7 +94,6 @@ export default function BookingPaymentPage() {
   const [ready, setReady] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [processingPayment, setProcessingPayment] = useState(false);
-  const [razorpayLoaded, setRazorpayLoaded] = useState(false);
 
   const [paymentMessage, setPaymentMessage] = useState("");
   const [paymentError, setPaymentError] = useState("");
@@ -140,31 +138,31 @@ export default function BookingPaymentPage() {
     checkAuthentication();
   }, []);
 
-  // Load the Razorpay checkout script.
+  // Load the Razorpay checkout script for one-time payments.
+  // Prepaid bookings do not depend on Razorpay being available.
   useEffect(() => {
-    if (window.Razorpay) {
-      setRazorpayLoaded(true);
-      return;
-    }
+    if (window.Razorpay) return;
+
+    const existingScript = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
+    );
+
+    if (existingScript) return;
 
     const script = document.createElement("script");
     script.src = "https://checkout.razorpay.com/v1/checkout.js";
     script.async = true;
 
-    script.onload = () => setRazorpayLoaded(true);
-
     script.onerror = () => {
       setPaymentError(
-        "Unable to load secure payment checkout. Please refresh the page."
+        "Unable to load secure payment checkout. Please refresh the page or try again."
       );
     };
 
     document.body.appendChild(script);
 
     return () => {
-      script.onload = null;
       script.onerror = null;
-      script.remove();
     };
   }, []);
 
@@ -269,7 +267,9 @@ export default function BookingPaymentPage() {
     };
   }, [router]);
 
-  // Reserve the slot, create/reuse a payment order and open Razorpay.
+  // Reserve the slot, then either:
+  // 1. Redirect immediately if prepaid credits were used.
+  // 2. Continue to Razorpay for a one-time payment.
   async function handlePayment() {
     if (!draft || processingPayment || paymentReceived) return;
 
@@ -280,7 +280,7 @@ export default function BookingPaymentPage() {
     try {
       let currentBookingId = bookingId;
 
-      // A. Create a temporary booking reservation.
+      // A. Create the booking reservation.
       if (!currentBookingId) {
         const reserveResponse = await fetch("/api/bookings/reserve", {
           method: "POST",
@@ -306,9 +306,21 @@ export default function BookingPaymentPage() {
 
         setBookingId(currentBookingId);
         setBookingReference(reserveData.bookingReference);
+
+        // Prepaid booking:
+        // The reserve API has already deducted credits and confirmed
+        // the booking. Do not create a Razorpay order.
+        if (reserveData.paymentRequired === false) {
+          router.replace(
+            `/booking/confirmation?bookingId=${encodeURIComponent(
+              currentBookingId
+            )}`
+          );
+          return;
+        }
       }
 
-      // B. Create or reuse the Razorpay order.
+      // B. Create or reuse the Razorpay order for one-time bookings.
       const orderResponse = await fetch("/api/bookings/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -346,7 +358,9 @@ export default function BookingPaymentPage() {
 
         handler: () => {
           router.replace(
-            `/booking/confirmation?bookingId=${encodeURIComponent(currentBookingId)}`
+            `/booking/confirmation?bookingId=${encodeURIComponent(
+              currentBookingId
+            )}`
           );
         },
 
@@ -364,7 +378,7 @@ export default function BookingPaymentPage() {
 
         setPaymentError(
           response.error?.description ||
-          "Payment failed. Please try again."
+            "Payment failed. Please try again."
         );
       });
 
@@ -427,7 +441,7 @@ export default function BookingPaymentPage() {
           </h1>
 
           <p className="mt-3 max-w-xl text-sm leading-6 text-white/75 sm:text-base">
-            Review your booking and price before proceeding to payment.
+            Review your booking and service amount before proceeding.
           </p>
         </div>
       </section>
@@ -506,7 +520,7 @@ export default function BookingPaymentPage() {
                       ? "Payment verification pending"
                       : bookingId
                         ? "Slot temporarily reserved"
-                        : "Awaiting payment"}
+                        : "Awaiting confirmation"}
                   </p>
 
                   {bookingReference && (
@@ -564,7 +578,7 @@ export default function BookingPaymentPage() {
               <div className="border-t border-border pt-4">
                 <div className="flex items-center justify-between gap-4">
                   <span className="font-semibold text-ink">
-                    Total payable
+                    Service amount
                   </span>
 
                   <span className="text-2xl font-bold text-forest">
@@ -573,8 +587,9 @@ export default function BookingPaymentPage() {
                 </div>
 
                 <p className="mt-2 text-xs leading-5 text-muted">
-                  The final payable amount is calculated and validated
-                  by the server before payment.
+                  If you have an eligible prepaid package, the required
+                  credits will be deducted automatically. Otherwise, you
+                  will pay this amount through secure checkout.
                 </p>
               </div>
             </div>
@@ -582,20 +597,14 @@ export default function BookingPaymentPage() {
             <button
               type="button"
               onClick={handlePayment}
-              disabled={
-                processingPayment ||
-                paymentReceived ||
-                !razorpayLoaded
-              }
+              disabled={processingPayment || paymentReceived}
               className="mt-7 flex min-h-12 w-full items-center justify-center rounded-full bg-forest px-5 text-sm font-semibold text-white transition hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
             >
               {paymentReceived
                 ? "Payment received"
                 : processingPayment
                   ? "Processing..."
-                  : !razorpayLoaded
-                    ? "Loading secure checkout..."
-                    : `Pay ₹${total} →`}
+                  : "Continue →"}
             </button>
 
             <Link
@@ -606,8 +615,9 @@ export default function BookingPaymentPage() {
             </Link>
 
             <p className="mt-6 text-center text-xs leading-5 text-muted">
-              Your booking is confirmed only after successful payment
-              verification and server-side booking confirmation.
+              Eligible prepaid bookings are confirmed after credit
+              deduction. Other bookings are confirmed after successful
+              payment verification.
             </p>
           </aside>
         </div>
