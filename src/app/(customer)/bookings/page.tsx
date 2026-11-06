@@ -1,16 +1,24 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 
 type BookingStatus =
+  | "Pending payment"
   | "Confirmed"
+  | "In progress"
   | "Completed"
   | "Cancelled"
+  | "Expired"
   | "Refunded";
 
-type PaymentStatus = "Paid" | "Refunded" | "Not paid";
+type PaymentStatus =
+  | "Paid"
+  | "Pending"
+  | "Failed"
+  | "Refunded"
+  | "Not paid";
 
 type Booking = {
   id: string;
@@ -24,61 +32,58 @@ type Booking = {
   paymentStatus: PaymentStatus;
 };
 
+type ApiBooking = {
+  id: string;
+  bookingReference: string;
+  society: string;
+  service: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  vehicle: string;
+  vehicleDetails: string | null;
+  amount: number;
+  bookingStatus: string;
+  paymentStatus: string;
+};
+
 type RequestType = "Cancellation" | "Rescheduling";
 
-const demoBookings: Booking[] = [
-  {
-    id: "NOS-DEMO-1042",
-    service: "Exterior + Interior Cleaning",
-    society: "Amrapali Kingswood & Golfhomes",
-    date: "2026-10-24",
-    time: "08:00 AM",
-    vehicle: "Hatchback",
-    amount: 499,
-    status: "Confirmed",
-    paymentStatus: "Paid",
-  },
-  {
-    id: "NOS-DEMO-1031",
-    service: "Exterior Cleaning",
-    society: "Amrapali Kingswood & Golfhomes",
-    date: "2026-10-12",
-    time: "09:00 AM",
-    vehicle: "Sedan",
-    amount: 349,
-    status: "Completed",
-    paymentStatus: "Paid",
-  },
-  {
-    id: "NOS-DEMO-1025",
-    service: "Premium Cleaning",
-    society: "Amrapali Kingswood & Golfhomes",
-    date: "2026-10-05",
-    time: "10:00 AM",
-    vehicle: "SUV",
-    amount: 899,
-    status: "Cancelled",
-    paymentStatus: "Refunded",
-  },
-  {
-    id: "NOS-DEMO-1018",
-    service: "Exterior Cleaning",
-    society: "Amrapali Kingswood & Golfhomes",
-    date: "2026-09-28",
-    time: "11:00 AM",
-    vehicle: "Hatchback",
-    amount: 349,
-    status: "Refunded",
-    paymentStatus: "Refunded",
-  },
-];
-
 const statusStyles: Record<BookingStatus, string> = {
+  "Pending payment": "bg-amber-50 text-amber-800",
   Confirmed: "bg-emerald-50 text-emerald-800",
+  "In progress": "bg-blue-50 text-blue-800",
   Completed: "bg-stone-100 text-stone-700",
   Cancelled: "bg-red-50 text-red-700",
+  Expired: "bg-stone-100 text-stone-600",
   Refunded: "bg-violet-50 text-violet-700",
 };
+
+function mapBookingStatus(status: string): BookingStatus {
+  const statusMap: Record<string, BookingStatus> = {
+    pending_payment: "Pending payment",
+    confirmed: "Confirmed",
+    assigned: "Confirmed",
+    in_progress: "In progress",
+    completed: "Completed",
+    cancelled: "Cancelled",
+    expired: "Expired",
+    refunded: "Refunded",
+  };
+
+  return statusMap[status.toLowerCase()] ?? "Confirmed";
+}
+
+function mapPaymentStatus(status: string): PaymentStatus {
+  const statusMap: Record<string, PaymentStatus> = {
+    paid: "Paid",
+    pending: "Pending",
+    failed: "Failed",
+    refunded: "Refunded",
+  };
+
+  return statusMap[status.toLowerCase()] ?? "Not paid";
+}
 
 function formatDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
@@ -90,27 +95,118 @@ function formatDate(value: string) {
   });
 }
 
+function formatTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+
+  return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function getTodayDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 export default function MyBookingsPage() {
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [today, setToday] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
   const [request, setRequest] = useState<{
     booking: Booking;
     type: RequestType;
   } | null>(null);
+
   const [reason, setReason] = useState("");
   const [requestedDate, setRequestedDate] = useState("");
   const [requestedTime, setRequestedTime] = useState("");
   const [notice, setNotice] = useState("");
 
-  const today = "2026-10-23";
+  useEffect(() => {
+    setToday(getTodayDate());
+  }, []);
 
+  // Fetch bookings belonging to the signed-in customer.
+  useEffect(() => {
+    async function fetchBookings() {
+      try {
+        setLoading(true);
+        setLoadError("");
+
+        const response = await fetch("/api/bookings/customer", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error || "Unable to retrieve your bookings."
+          );
+        }
+
+        if (!Array.isArray(data.bookings)) {
+          throw new Error("Invalid booking data received from the server.");
+        }
+
+        const mappedBookings: Booking[] = (
+          data.bookings as ApiBooking[]
+        ).map((booking) => ({
+          id: booking.bookingReference,
+          service: booking.service,
+          society: booking.society,
+          date: booking.date,
+          time: formatTime(booking.startTime),
+          vehicle: booking.vehicle
+            ? booking.vehicle.charAt(0).toUpperCase() +
+            booking.vehicle.slice(1)
+            : "Not specified",
+          amount: Number(booking.amount),
+          status: mapBookingStatus(booking.bookingStatus),
+          paymentStatus: mapPaymentStatus(booking.paymentStatus),
+        }));
+
+        setBookings(mappedBookings);
+      } catch (error) {
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : "Unable to retrieve your bookings."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchBookings();
+  }, []);
+
+
+  const isUpcomingBooking = (booking: Booking) =>
+    Boolean(today) &&
+    ["Confirmed", "In progress"].includes(booking.status) &&
+    booking.date >= today;
+
+  // Search and filter the live booking records.
   const filteredBookings = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return demoBookings.filter((booking) => {
-      const isUpcoming =
-        booking.status === "Confirmed" && booking.date >= today;
+    return bookings.filter((booking) => {
+      const isUpcoming = isUpcomingBooking(booking);
 
       const matchesFilter =
         filter === "All" ||
@@ -126,8 +222,9 @@ export default function MyBookingsPage() {
 
       return matchesFilter && matchesSearch;
     });
-  }, [filter, search]);
+  }, [bookings, filter, search, today]);
 
+  // Open the preview-only cancellation or rescheduling form.
   function openRequest(booking: Booking, type: RequestType) {
     setNotice("");
     setReason("");
@@ -136,21 +233,32 @@ export default function MyBookingsPage() {
     setRequest({ booking, type });
   }
 
-  function submitPreviewRequest(event: React.FormEvent<HTMLFormElement>) {
+  function submitPreviewRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!request) return;
 
-    // Preview only. No request is saved or sent to a manager.
     setNotice(
       `${request.type} request preview completed for ${request.booking.id}. No real request was submitted.`
     );
+
     setRequest(null);
     setExpandedId(null);
   }
 
+  const upcomingCount = bookings.filter(isUpcomingBooking).length;
+
+  const completedCount = bookings.filter(
+    (booking) => booking.status === "Completed"
+  ).length;
+
+  const pastBookingsCount = bookings.filter(
+    (booking) => booking.date < today
+  ).length;
+
   return (
     <div className="min-h-screen bg-cream">
+      {/* Page heading */}
       <section className="bg-forest text-white">
         <div className="container-shell py-10 md:py-14">
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-lime">
@@ -169,17 +277,7 @@ export default function MyBookingsPage() {
       </section>
 
       <section className="container-shell py-8 md:py-12">
-        <div className="mb-6 rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <p className="font-semibold text-amber-950">
-            Development preview — sample bookings
-          </p>
-          <p className="mt-1 text-sm leading-6 text-amber-900">
-            These records are illustrative and are not retrieved from your
-            account. Request actions below do not update bookings or notify
-            a manager.
-          </p>
-        </div>
-
+        {/* Preview request notification */}
         {notice && (
           <div
             role="status"
@@ -189,33 +287,31 @@ export default function MyBookingsPage() {
           </div>
         )}
 
+        {/* Booking summary */}
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl border border-border bg-white p-5">
             <p className="text-sm text-muted">Upcoming</p>
             <p className="mt-2 text-3xl font-bold text-forest">
-              {
-                demoBookings.filter(
-                  (b) => b.status === "Confirmed" && b.date >= today
-                ).length
-              }
+              {upcomingCount}
             </p>
           </div>
 
           <div className="rounded-2xl border border-border bg-white p-5">
             <p className="text-sm text-muted">Completed</p>
             <p className="mt-2 text-3xl font-bold text-ink">
-              {demoBookings.filter((b) => b.status === "Completed").length}
+              {completedCount}
             </p>
           </div>
 
           <div className="rounded-2xl border border-border bg-white p-5">
             <p className="text-sm text-muted">Past bookings</p>
             <p className="mt-2 text-3xl font-bold text-ink">
-              {demoBookings.filter((b) => b.date < today).length}
+              {pastBookingsCount}
             </p>
           </div>
         </div>
 
+        {/* Filters and search */}
         <div className="mt-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2">
             {["All", "Upcoming", "History"].map((item) => (
@@ -223,11 +319,10 @@ export default function MyBookingsPage() {
                 key={item}
                 type="button"
                 onClick={() => setFilter(item)}
-                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition ${
-                  filter === item
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition ${filter === item
                     ? "bg-forest text-white"
                     : "border border-border bg-white text-ink hover:border-forest"
-                }`}
+                  }`}
               >
                 {item}
               </button>
@@ -244,164 +339,216 @@ export default function MyBookingsPage() {
           />
         </div>
 
+        {/* Booking list */}
         <div className="mt-6 space-y-4">
-          {filteredBookings.map((booking) => {
-            const expanded = expandedId === booking.id;
-            const isUpcoming =
-              booking.status === "Confirmed" && booking.date >= today;
-
-            return (
-              <article
-                key={booking.id}
-                className="overflow-hidden rounded-2xl border border-border bg-white"
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    setExpandedId(expanded ? null : booking.id)
-                  }
-                  aria-expanded={expanded}
-                  className="flex w-full flex-col gap-4 p-5 text-left transition hover:bg-stone-50 sm:p-6"
-                >
-                  <div className="flex w-full flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium text-muted">
-                        Booking reference · {booking.id}
-                      </p>
-                      <h2 className="mt-2 text-lg font-bold text-ink">
-                        {booking.service}
-                      </h2>
-                      <p className="mt-1 text-sm text-muted">
-                        {booking.society}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${statusStyles[booking.status]}`}
-                    >
-                      {booking.status}
-                    </span>
-                  </div>
-
-                  <div className="flex w-full flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                    <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted">
-                      <span>{formatDate(booking.date)}</span>
-                      <span>{booking.time}</span>
-                      <span>{booking.vehicle}</span>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <span className="font-bold text-ink">
-                        ₹{booking.amount}
-                      </span>
-                      <span className="text-xs font-semibold text-forest">
-                        {expanded ? "Close −" : "Details +"}
-                      </span>
-                    </div>
-                  </div>
-                </button>
-
-                {expanded && (
-                  <div className="border-t border-border bg-stone-50 p-5 sm:p-6">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                          Payment status
-                        </p>
-                        <p className="mt-1 font-semibold text-ink">
-                          {booking.paymentStatus}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                          Vehicle
-                        </p>
-                        <p className="mt-1 font-semibold text-ink">
-                          {booking.vehicle}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                          Appointment
-                        </p>
-                        <p className="mt-1 font-semibold text-ink">
-                          {formatDate(booking.date)} · {booking.time}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                          Total amount
-                        </p>
-                        <p className="mt-1 font-semibold text-ink">
-                          ₹{booking.amount}
-                        </p>
-                      </div>
-                    </div>
-
-                    {booking.paymentStatus === "Refunded" && (
-                      <p className="mt-4 rounded-xl bg-violet-50 p-3 text-sm leading-6 text-violet-900">
-                        Refund status: Refunded. In production, the actual
-                        refund status will come from the backend.
-                      </p>
-                    )}
-
-                    {isUpcoming && (
-                      <div className="mt-5 flex flex-wrap gap-3">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openRequest(booking, "Rescheduling")
-                          }
-                          className="rounded-full border border-forest px-4 py-2.5 text-sm font-semibold text-forest hover:bg-white"
-                        >
-                          Request rescheduling
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openRequest(booking, "Cancellation")
-                          }
-                          className="rounded-full border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-white"
-                        >
-                          Request cancellation
-                        </button>
-                      </div>
-                    )}
-
-                    {isUpcoming && (
-                      <p className="mt-3 text-xs leading-5 text-muted">
-                        Requests require manager approval. Your existing
-                        booking remains unchanged until a request is approved.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </article>
-            );
-          })}
-
-          {filteredBookings.length === 0 && (
+          {/* Loading state */}
+          {loading && (
             <div className="rounded-2xl border border-border bg-white px-6 py-12 text-center">
-              <h2 className="text-lg font-bold text-ink">
-                No bookings found
-              </h2>
-              <p className="mt-2 text-sm text-muted">
-                Try another search or filter, or explore our services.
+              <p className="font-semibold text-ink">
+                Loading your bookings...
               </p>
-              <Link
-                href="/services"
-                className="mt-5 inline-flex rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white hover:bg-ink"
-              >
-                Explore services
-              </Link>
+              <p className="mt-2 text-sm text-muted">
+                Please wait while we retrieve your booking history.
+              </p>
             </div>
           )}
+
+          {/* Error state */}
+          {!loading && loadError && (
+            <div className="rounded-2xl border border-red-200 bg-white px-6 py-10 text-center">
+              <h2 className="text-lg font-bold text-ink">
+                Unable to load bookings
+              </h2>
+
+              <p className="mt-2 text-sm text-muted">{loadError}</p>
+
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="mt-5 rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white hover:bg-ink"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          {/* Live booking records */}
+          {!loading &&
+            !loadError &&
+            filteredBookings.map((booking) => {
+              const expanded = expandedId === booking.id;
+              const isUpcoming = isUpcomingBooking(booking);
+
+              return (
+                <article
+                  key={booking.id}
+                  className="overflow-hidden rounded-2xl border border-border bg-white"
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setExpandedId(expanded ? null : booking.id)
+                    }
+                    aria-expanded={expanded}
+                    className="flex w-full flex-col gap-4 p-5 text-left transition hover:bg-stone-50 sm:p-6"
+                  >
+                    <div className="flex w-full flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium text-muted">
+                          Booking reference · {booking.id}
+                        </p>
+
+                        <h2 className="mt-2 text-lg font-bold text-ink">
+                          {booking.service}
+                        </h2>
+
+                        <p className="mt-1 text-sm text-muted">
+                          {booking.society}
+                        </p>
+                      </div>
+
+                      <span
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold ${statusStyles[booking.status]}`}
+                      >
+                        {booking.status}
+                      </span>
+                    </div>
+
+                    <div className="flex w-full flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                      <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted">
+                        <span>{formatDate(booking.date)}</span>
+                        <span>{booking.time}</span>
+                        <span>{booking.vehicle}</span>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold text-ink">
+                          ₹{booking.amount}
+                        </span>
+
+                        <span className="text-xs font-semibold text-forest">
+                          {expanded ? "Close −" : "Details +"}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Expanded booking details */}
+                  {expanded && (
+                    <div className="border-t border-border bg-stone-50 p-5 sm:p-6">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                            Payment status
+                          </p>
+
+                          <p className="mt-1 font-semibold text-ink">
+                            {booking.paymentStatus}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                            Vehicle
+                          </p>
+
+                          <p className="mt-1 font-semibold text-ink">
+                            {booking.vehicle}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                            Appointment
+                          </p>
+
+                          <p className="mt-1 font-semibold text-ink">
+                            {formatDate(booking.date)} · {booking.time}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                            Total amount
+                          </p>
+
+                          <p className="mt-1 font-semibold text-ink">
+                            ₹{booking.amount}
+                          </p>
+                        </div>
+                      </div>
+
+                      {booking.paymentStatus === "Refunded" && (
+                        <p className="mt-4 rounded-xl bg-violet-50 p-3 text-sm leading-6 text-violet-900">
+                          Refund status: Refunded. The refund status is
+                          retrieved from your booking payment record.
+                        </p>
+                      )}
+
+                      {/* Preview-only request actions */}
+                      {isUpcoming && (
+                        <div className="mt-5 flex flex-wrap gap-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openRequest(booking, "Rescheduling")
+                            }
+                            className="rounded-full border border-forest px-4 py-2.5 text-sm font-semibold text-forest hover:bg-white"
+                          >
+                            Request rescheduling
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openRequest(booking, "Cancellation")
+                            }
+                            className="rounded-full border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-white"
+                          >
+                            Request cancellation
+                          </button>
+                        </div>
+                      )}
+
+                      {isUpcoming && (
+                        <p className="mt-3 text-xs leading-5 text-muted">
+                          Requests require manager approval. Your existing
+                          booking remains unchanged until a request is
+                          approved.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+
+          {/* Empty state */}
+          {!loading &&
+            !loadError &&
+            filteredBookings.length === 0 && (
+              <div className="rounded-2xl border border-border bg-white px-6 py-12 text-center">
+                <h2 className="text-lg font-bold text-ink">
+                  No bookings found
+                </h2>
+
+                <p className="mt-2 text-sm text-muted">
+                  {bookings.length === 0
+                    ? "You haven't made any bookings yet. Explore our services to schedule your first wash."
+                    : "Try another search or filter, or explore our services."}
+                </p>
+
+                <Link
+                  href="/services"
+                  className="mt-5 inline-flex rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white hover:bg-ink"
+                >
+                  Explore services
+                </Link>
+              </div>
+            )}
         </div>
 
+        {/* Book another wash */}
         <div className="mt-8 text-center">
           <Link
             href="/services"
@@ -412,6 +559,7 @@ export default function MyBookingsPage() {
         </div>
       </section>
 
+      {/* Cancellation / rescheduling preview modal */}
       {request && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-5"
@@ -429,6 +577,7 @@ export default function MyBookingsPage() {
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                   {request.booking.id}
                 </p>
+
                 <h2
                   id="request-title"
                   className="mt-2 text-2xl font-bold text-ink"
@@ -463,6 +612,7 @@ export default function MyBookingsPage() {
                     >
                       Preferred new date
                     </label>
+
                     <input
                       id="requested-date"
                       type="date"
@@ -483,6 +633,7 @@ export default function MyBookingsPage() {
                     >
                       Preferred time
                     </label>
+
                     <select
                       id="requested-time"
                       required
@@ -501,6 +652,7 @@ export default function MyBookingsPage() {
                       <option value="03:00 PM">03:00 PM</option>
                       <option value="04:00 PM">04:00 PM</option>
                     </select>
+
                     <p className="mt-2 text-xs leading-5 text-muted">
                       These are preview choices, not verified available slots.
                     </p>
@@ -513,8 +665,12 @@ export default function MyBookingsPage() {
                   htmlFor="request-reason"
                   className="block text-sm font-semibold text-ink"
                 >
-                  Reason {request.type === "Cancellation" ? "(required)" : "(optional)"}
+                  Reason{" "}
+                  {request.type === "Cancellation"
+                    ? "(required)"
+                    : "(optional)"}
                 </label>
+
                 <textarea
                   id="request-reason"
                   required={request.type === "Cancellation"}
@@ -542,6 +698,7 @@ export default function MyBookingsPage() {
                 >
                   Preview request
                 </button>
+
                 <button
                   type="button"
                   onClick={() => setRequest(null)}
