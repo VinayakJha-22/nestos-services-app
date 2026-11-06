@@ -87,6 +87,7 @@ export async function POST(request: NextRequest) {
     const bookingDate = body.date;
     const startTime = body.time;
     const vehicleType = body.vehicleType;
+    const requestedPaymentMethod = body.paymentMethod;
 
     const vehicleDetails =
       typeof body.vehicleDetails === "string"
@@ -102,7 +103,9 @@ export async function POST(request: NextRequest) {
       !/^\d{4}-\d{2}-\d{2}$/.test(bookingDate) ||
       typeof startTime !== "string" ||
       !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
-      !["hatchback", "sedan", "suv"].includes(vehicleType)
+      !["hatchback", "sedan", "suv"].includes(vehicleType) ||
+      typeof requestedPaymentMethod !== "string" ||
+      !["prepaid", "one_time"].includes(requestedPaymentMethod)
     ) {
       return NextResponse.json(
         { success: false, error: "Invalid booking information." },
@@ -443,9 +446,79 @@ export async function POST(request: NextRequest) {
         throw new Error("Unable to identify the starting booking slot.");
       }
 
-      // 10. Calculate price on the server.
+      // 10. Find and lock an eligible subscription only when
+      // the customer explicitly chooses prepaid credits.
+      let prepaidSubscription = null;
+
+      if (requestedPaymentMethod === "prepaid") {
+        const subscriptionResult = await client.query(
+          `SELECT
+             cs.id AS subscription_id,
+             cs.credits_remaining,
+             cs.expires_at,
+             psc.credit_cost
+           FROM public.customer_subscriptions cs
+           INNER JOIN public.packages p
+             ON p.id = cs.package_id
+           INNER JOIN public.society_packages sp
+             ON sp.society_id = cs.society_id
+            AND sp.package_id = cs.package_id
+           INNER JOIN public.package_service_credit_costs psc
+             ON psc.service_id = $3
+           WHERE cs.customer_id = $1
+             AND cs.society_id = $2
+             AND cs.status = 'active'
+             AND cs.starts_at <= NOW()
+             AND cs.expires_at > NOW()
+             AND cs.credits_remaining >= psc.credit_cost
+             AND p.is_active = TRUE
+             AND sp.is_available = TRUE
+           ORDER BY cs.expires_at ASC, cs.created_at ASC
+           LIMIT 1
+           FOR UPDATE OF cs`,
+          [customer.id, societyId, normalizedServiceId],
+        );
+
+        prepaidSubscription = subscriptionResult.rows[0] ?? null;
+
+        if (!prepaidSubscription) {
+          await client.query("ROLLBACK");
+
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                "Your package is no longer eligible or does not have enough credits. Please choose Pay now.",
+            },
+            { status: 409 },
+          );
+        }
+      }
+
+      const isPrepaid = requestedPaymentMethod === "prepaid";
+
+      const creditCost = isPrepaid
+        ? Number(prepaidSubscription.credit_cost)
+        : 0;
+
+      const bookingStatus = isPrepaid
+        ? "confirmed"
+        : "pending_payment";
+
+      const paymentMethod = requestedPaymentMethod;
+
+      const paymentStatus = isPrepaid
+        ? "not_required"
+        : "pending";
+
+      // 11. Calculate price on the server.
+      // Prepaid bookings have no vehicle surcharge.
+      // One-time SUV bookings include the ₹100 surcharge.
       const basePricePaise = Math.round(Number(config.base_price) * 100);
-      const vehicleSurchargePaise = vehicleType === "suv" ? 10000 : 0;
+
+      const vehicleSurchargePaise =
+        !isPrepaid && vehicleType === "suv" ? 10000 : 0;
+
       const totalAmountPaise = basePricePaise + vehicleSurchargePaise;
 
       if (
@@ -459,55 +532,6 @@ export async function POST(request: NextRequest) {
       const basePrice = (basePricePaise / 100).toFixed(2);
       const vehicleSurcharge = (vehicleSurchargePaise / 100).toFixed(2);
       const totalAmount = (totalAmountPaise / 100).toFixed(2);
-
-      // 11. Find and lock the earliest-expiring eligible subscription.
-      const subscriptionResult = await client.query(
-        `SELECT
-           cs.id AS subscription_id,
-           cs.credits_remaining,
-           cs.expires_at,
-           psc.credit_cost
-         FROM public.customer_subscriptions cs
-         INNER JOIN public.packages p
-           ON p.id = cs.package_id
-         INNER JOIN public.society_packages sp
-           ON sp.society_id = cs.society_id
-          AND sp.package_id = cs.package_id
-         INNER JOIN public.package_service_credit_costs psc
-           ON psc.service_id = $3
-         WHERE cs.customer_id = $1
-           AND cs.society_id = $2
-           AND cs.status = 'active'
-           AND cs.starts_at <= NOW()
-           AND cs.expires_at > NOW()
-           AND cs.credits_remaining >= psc.credit_cost
-           AND p.is_active = TRUE
-           AND sp.is_available = TRUE
-         ORDER BY cs.expires_at ASC, cs.created_at ASC
-         LIMIT 1
-         FOR UPDATE OF cs`,
-        [customer.id, societyId, normalizedServiceId],
-      );
-
-      const prepaidSubscription =
-        subscriptionResult.rows[0] ?? null;
-
-      const isPrepaid = Boolean(prepaidSubscription);
-      const creditCost = isPrepaid
-        ? Number(prepaidSubscription.credit_cost)
-        : 0;
-
-      const bookingStatus = isPrepaid
-        ? "confirmed"
-        : "pending_payment";
-
-      const paymentMethod = isPrepaid
-        ? "prepaid"
-        : "one_time";
-
-      const paymentStatus = isPrepaid
-        ? "not_required"
-        : "pending";
 
       // 12. Create the booking.
       const bookingResult = await client.query(
@@ -615,8 +639,8 @@ export async function POST(request: NextRequest) {
       );
 
       // 15. Create the slot reservation.
-      // Prepaid bookings are converted immediately; one-time bookings
-      // remain active until payment is completed.
+      // Prepaid bookings are converted immediately.
+      // One-time bookings remain active until payment is completed.
       const reservationResult = await client.query(
         `INSERT INTO public.booking_slot_reservations (
            booking_id,

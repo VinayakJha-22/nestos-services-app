@@ -65,6 +65,21 @@ type RazorpayInstance = {
   ) => void;
 };
 
+type PackageServiceEligibility = {
+  serviceId: string;
+  creditCost: number;
+  availableCredits: number;
+  canRedeem: boolean;
+  packageName: string | null;
+};
+
+type PackageEligibilityResponse = {
+  success: boolean;
+  hasActivePackage: boolean;
+  societyId: string;
+  services: PackageServiceEligibility[];
+};
+
 declare global {
   interface Window {
     Razorpay?: new (
@@ -90,6 +105,11 @@ export default function BookingPaymentPage() {
   const [draft, setDraft] = useState<BookingDraft | null>(null);
   const [society, setSociety] = useState<Society | null>(null);
   const [service, setService] = useState<Service | null>(null);
+  const [packageEligibility, setPackageEligibility] =
+    useState<PackageEligibilityResponse | null>(null);
+
+  const [paymentMethod, setPaymentMethod] =
+    useState<"prepaid" | "one_time">("one_time");
 
   const [ready, setReady] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -209,6 +229,25 @@ export default function BookingPaymentPage() {
         const societiesData = await societiesResponse.json();
         const servicesData = await servicesResponse.json();
 
+        let eligibilityData: PackageEligibilityResponse | null = null;
+
+        try {
+          const eligibilityResponse = await fetch(
+            `/api/packages/eligibility?societyId=${encodeURIComponent(
+              parsed.societyId
+            )}`,
+            { cache: "no-store" }
+          );
+
+          const responseData = await eligibilityResponse.json();
+
+          if (eligibilityResponse.ok && responseData.success) {
+            eligibilityData = responseData as PackageEligibilityResponse;
+          }
+        } catch (error) {
+          console.error("Unable to check package eligibility:", error);
+        }
+
         if (!societiesResponse.ok || !societiesData.success) {
           throw new Error("Unable to verify the selected society.");
         }
@@ -239,6 +278,8 @@ export default function BookingPaymentPage() {
 
         setSociety(selectedSociety);
         setService(selectedService);
+        setPackageEligibility(eligibilityData);
+        setPaymentMethod("one_time");
 
         setDraft({
           societyId: parsed.societyId,
@@ -291,6 +332,7 @@ export default function BookingPaymentPage() {
             date: draft.date,
             time: draft.time,
             vehicleType: draft.vehicle.toLowerCase(),
+            paymentMethod,
           }),
         });
 
@@ -378,7 +420,7 @@ export default function BookingPaymentPage() {
 
         setPaymentError(
           response.error?.description ||
-            "Payment failed. Please try again."
+          "Payment failed. Please try again."
         );
       });
 
@@ -418,7 +460,20 @@ export default function BookingPaymentPage() {
     );
   }
 
-  const vehicleSurcharge = draft.vehicle === "SUV" ? 100 : 0;
+  const packageService = packageEligibility?.services.find(
+    (item) => item.serviceId === service.id
+  );
+
+  const canUsePackageCredits = Boolean(
+    packageEligibility?.hasActivePackage &&
+    packageService?.canRedeem
+  );
+
+  const vehicleSurcharge =
+    paymentMethod === "one_time" && draft.vehicle === "SUV"
+      ? 100
+      : 0;
+
   const total = service.price + vehicleSurcharge;
 
   return (
@@ -555,43 +610,179 @@ export default function BookingPaymentPage() {
             <h2 className="text-xl font-bold text-ink">
               Price summary
             </h2>
+            <div className="mt-6 space-y-3">
+              <h3 className="text-sm font-semibold text-ink">
+                Choose payment method
+              </h3>
 
-            <div className="mt-6 space-y-4 text-sm">
-              <div className="flex justify-between gap-4">
-                <span className="text-muted">{service.name}</span>
+              {canUsePackageCredits && packageService && (
+                <button
+                  type="button"
+                  disabled={Boolean(bookingId) || processingPayment}
+                  onClick={() => {
+                    setPaymentMethod("prepaid");
+                    setPaymentError("");
+                  }}
+                  className={`w-full rounded-2xl border p-4 text-left transition ${paymentMethod === "prepaid"
+                      ? "border-forest bg-forest/5"
+                      : "border-border hover:border-forest/40"
+                    } disabled:cursor-not-allowed disabled:opacity-70`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-ink">
+                        Pay via credits
+                      </p>
 
-                <span className="font-medium text-ink">
-                  ₹{service.price}
-                </span>
-              </div>
+                      <p className="mt-1 text-xs text-muted">
+                        {packageService.packageName || "Your active package"}
+                      </p>
 
-              {vehicleSurcharge > 0 && (
-                <div className="flex justify-between gap-4">
-                  <span className="text-muted">SUV surcharge</span>
+                      <p className="mt-2 text-sm text-forest">
+                        {packageService.creditCost} credits required
+                      </p>
 
-                  <span className="font-medium text-ink">
-                    ₹{vehicleSurcharge}
-                  </span>
-                </div>
+                      <p className="mt-1 text-xs text-muted">
+                        {packageService.availableCredits} credits available
+                      </p>
+                    </div>
+
+                    <span
+                      className={`mt-1 flex size-5 shrink-0 items-center justify-center rounded-full border ${paymentMethod === "prepaid"
+                          ? "border-forest bg-forest"
+                          : "border-border"
+                        }`}
+                    >
+                      {paymentMethod === "prepaid" && (
+                        <span className="size-2 rounded-full bg-white" />
+                      )}
+                    </span>
+                  </div>
+                </button>
               )}
 
-              <div className="border-t border-border pt-4">
-                <div className="flex items-center justify-between gap-4">
-                  <span className="font-semibold text-ink">
-                    Service amount
-                  </span>
+              <button
+                type="button"
+                disabled={Boolean(bookingId) || processingPayment}
+                onClick={() => {
+                  setPaymentMethod("one_time");
+                  setPaymentError("");
+                }}
+                className={`w-full rounded-2xl border p-4 text-left transition ${paymentMethod === "one_time"
+                    ? "border-forest bg-forest/5"
+                    : "border-border hover:border-forest/40"
+                  } disabled:cursor-not-allowed disabled:opacity-70`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-ink">
+                      Pay now
+                    </p>
 
-                  <span className="text-2xl font-bold text-forest">
-                    ₹{total}
+                    <p className="mt-1 text-xs text-muted">
+                      Pay securely using Razorpay
+                    </p>
+                  </div>
+
+                  <span
+                    className={`flex size-5 shrink-0 items-center justify-center rounded-full border ${paymentMethod === "one_time"
+                        ? "border-forest bg-forest"
+                        : "border-border"
+                      }`}
+                  >
+                    {paymentMethod === "one_time" && (
+                      <span className="size-2 rounded-full bg-white" />
+                    )}
                   </span>
                 </div>
+              </button>
 
-                <p className="mt-2 text-xs leading-5 text-muted">
-                  If you have an eligible prepaid package, the required
-                  credits will be deducted automatically. Otherwise, you
-                  will pay this amount through secure checkout.
-                </p>
-              </div>
+              {packageEligibility?.hasActivePackage &&
+                packageService &&
+                !packageService.canRedeem && (
+                  <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                    Your active package does not have enough credits for this
+                    service, or it is not eligible at this location. Please
+                    choose Pay now.
+                  </p>
+                )}
+            </div>
+            <div className="mt-6 space-y-4 text-sm">
+              {paymentMethod === "prepaid" && packageService ? (
+                <>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted">Package</span>
+
+                    <span className="font-medium text-ink">
+                      {packageService.packageName || "Prepaid package"}
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted">Credits required</span>
+
+                    <span className="font-semibold text-forest">
+                      {packageService.creditCost} credits
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted">Credits remaining after booking</span>
+
+                    <span className="font-medium text-ink">
+                      {packageService.availableCredits - packageService.creditCost}
+                    </span>
+                  </div>
+
+                  <div className="border-t border-border pt-4">
+                    <p className="text-lg font-bold text-forest">
+                      No payment required
+                    </p>
+
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      Credits will be deducted when you confirm this booking.
+                      Your booking will then be confirmed.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted">{service.name}</span>
+
+                    <span className="font-medium text-ink">
+                      ₹{service.price}
+                    </span>
+                  </div>
+
+                  {vehicleSurcharge > 0 && (
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted">SUV surcharge</span>
+
+                      <span className="font-medium text-ink">
+                        ₹{vehicleSurcharge}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="border-t border-border pt-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="font-semibold text-ink">
+                        Total payable
+                      </span>
+
+                      <span className="text-2xl font-bold text-forest">
+                        ₹{total}
+                      </span>
+                    </div>
+
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      Your booking will be confirmed after successful payment
+                      verification.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
 
             <button
@@ -604,7 +795,9 @@ export default function BookingPaymentPage() {
                 ? "Payment received"
                 : processingPayment
                   ? "Processing..."
-                  : "Continue →"}
+                  : paymentMethod === "prepaid"
+                    ? "Confirm using credits →"
+                    : "Pay ₹" + total + " →"}
             </button>
 
             <Link

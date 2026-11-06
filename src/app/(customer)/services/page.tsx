@@ -21,7 +21,24 @@ export default function ServicesPage() {
     duration_minutes: number | null;
   };
 
+  type PackageServiceEligibility = {
+    serviceId: string;
+    creditCost: number;
+    availableCredits: number;
+    canRedeem: boolean;
+    packageName: string | null;
+  };
+
+  type PackageEligibilityResponse = {
+    success: boolean;
+    societyId: string;
+    hasActivePackage: boolean;
+    services: PackageServiceEligibility[];
+  };
+
   const [services, setServices] = useState<Service[]>([]);
+  const [packageEligibility, setPackageEligibility] =
+    useState<PackageEligibilityResponse | null>(null);
   const [isLoadingServices, setIsLoadingServices] = useState(false);
   const [serviceError, setServiceError] = useState("");
 
@@ -92,8 +109,30 @@ export default function ServicesPage() {
             );
           }
 
+          // Load package eligibility for the selected society.
+          // Guests and customers without an active package continue with normal pricing.
+          let eligibilityData: PackageEligibilityResponse | null = null;
+
+          try {
+            const eligibilityResponse = await fetch(
+              `/api/packages/eligibility?societyId=${encodeURIComponent(
+                selectedSociety.id
+              )}`,
+              { cache: "no-store" }
+            );
+
+            const responseData = await eligibilityResponse.json();
+
+            if (eligibilityResponse.ok && responseData.success) {
+              eligibilityData = responseData as PackageEligibilityResponse;
+            }
+          } catch (error) {
+            console.error("Unable to load package eligibility:", error);
+          }
+
           if (!cancelled) {
             setServices(servicesData.services ?? []);
+            setPackageEligibility(eligibilityData);
           }
         } catch (error) {
           console.error("Failed to load services:", error);
@@ -226,8 +265,8 @@ export default function ServicesPage() {
               <article
                 key={service.id}
                 className={`relative flex flex-col rounded-3xl border bg-white p-6 transition duration-200 hover:-translate-y-1 hover:shadow-lg ${service.featured
-                    ? "border-forest ring-1 ring-forest/10"
-                    : "border-border"
+                  ? "border-forest ring-1 ring-forest/10"
+                  : "border-border"
                   }`}
               >
                 {service.featured && (
@@ -311,21 +350,80 @@ export default function ServicesPage() {
                 </p>
 
                 <div className="mt-6 border-t border-border pt-5">
-                  <p className="text-xs text-muted">Starting at</p>
-                  <p className="mt-1 text-3xl font-bold tracking-tight text-forest">
-                    ₹{service.price}
-                  </p>
-                  <p className="mt-1 text-xs text-muted">
-                    Base service price
-                  </p>
+                  {(() => {
+                    const packageService = packageEligibility?.services.find(
+                      (item) => item.serviceId === service.id
+                    );
+
+                    const showCredits =
+                      packageEligibility?.hasActivePackage === true &&
+                      Boolean(packageService);
+
+                    return (
+                      <>
+                        {showCredits ? (
+                          <>
+                            <p className="text-xs text-muted">
+                              Your package rate
+                            </p>
+
+                            <p className="mt-1 text-3xl font-bold tracking-tight text-forest">
+                              {packageService!.creditCost}{" "}
+                              {packageService!.creditCost === 1 ? "credit" : "credits"}
+                            </p>
+
+                            <p className="mt-1 text-xs text-muted">
+                              Per wash
+                            </p>
+
+                            {!packageService!.canRedeem && (
+                              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                                <p className="text-sm font-semibold text-amber-950">
+                                  Not enough package credits
+                                </p>
+
+                                <p className="mt-1 text-xs leading-5 text-amber-900">
+                                  You have {packageService!.availableCredits}{" "}
+                                  {packageService!.availableCredits === 1
+                                    ? "credit"
+                                    : "credits"}{" "}
+                                  available in your eligible package, but this wash
+                                  requires {packageService!.creditCost}. You can still
+                                  book and pay normally.
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-xs text-muted">Starting at</p>
+
+                            <p className="mt-1 text-3xl font-bold tracking-tight text-forest">
+                              ₹{service.price}
+                            </p>
+
+                            <p className="mt-1 text-xs text-muted">
+                              Base service price
+                            </p>
+                          </>
+                        )}
+
+                        {service.duration_minutes && (
+                          <p className="mt-3 text-xs font-medium text-muted">
+                            Approx. {service.duration_minutes} minutes
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div className="mt-auto pt-7">
                   <Link
                     href={`/booking/calendar?service=${service.id}`}
                     className={`flex min-h-12 w-full items-center justify-center gap-2 rounded-full px-5 text-sm font-semibold transition ${service.featured
-                        ? "bg-forest text-white hover:bg-ink"
-                        : "border border-border bg-white text-forest hover:border-forest hover:bg-cream"
+                      ? "bg-forest text-white hover:bg-ink"
+                      : "border border-border bg-white text-forest hover:border-forest hover:bg-cream"
                       }`}
                   >
                     Choose service
