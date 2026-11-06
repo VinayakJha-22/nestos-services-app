@@ -1,4 +1,3 @@
-
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
@@ -75,8 +74,16 @@ function getBookingState(booking: Booking): BookingState {
     return "refunded";
   }
 
+  // Both successful Razorpay payments and prepaid redemptions
+  // are treated as confirmed bookings.
   if (
-    booking.paymentStatus === "paid" &&
+    (
+      booking.paymentStatus === "paid" ||
+      (
+        booking.paymentMethod === "prepaid" &&
+        booking.paymentStatus === "not_required"
+      )
+    ) &&
     ["confirmed", "assigned", "in_progress", "completed"].includes(
       booking.bookingStatus
     )
@@ -163,6 +170,7 @@ function BookingConfirmationContent() {
   }, [fetchBookingStatus]);
 
   // Refresh while the Razorpay webhook is still processing payment.
+  // Prepaid bookings are already confirmed and will not need polling.
   useEffect(() => {
     if (!booking) return;
 
@@ -223,6 +231,7 @@ function BookingConfirmationContent() {
 
   const state = getBookingState(booking);
   const currency = booking.pricing.currency || "INR";
+  const isPrepaid = booking.paymentMethod === "prepaid";
 
   const stateContent: Record<
     BookingState,
@@ -236,7 +245,7 @@ function BookingConfirmationContent() {
     confirmed: {
       title: "Your booking is confirmed!",
       description:
-        "Your payment has been verified and your car wash appointment is confirmed.",
+        "Your car wash appointment is confirmed. We look forward to serving you.",
       icon: "✓",
       color: "border-green-200 bg-green-50 text-green-900",
     },
@@ -292,7 +301,7 @@ function BookingConfirmationContent() {
           </h1>
 
           <p className="mt-3 text-sm text-white/75">
-            Your appointment details and payment status.
+            Your appointment details and booking status.
           </p>
         </div>
       </section>
@@ -408,49 +417,68 @@ function BookingConfirmationContent() {
             </div>
 
             <div className="mt-7 border-t border-border pt-6">
-              <h3 className="font-bold text-ink">Payment summary</h3>
+              <h3 className="font-bold text-ink">
+                {isPrepaid ? "Package redemption" : "Payment summary"}
+              </h3>
 
-              <div className="mt-4 space-y-3 text-sm">
-                <div className="flex justify-between gap-4">
-                  <span className="text-muted">Service amount</span>
-                  <span className="font-medium text-ink">
-                    {formatMoney(
-                      booking.pricing.baseServicePrice,
-                      currency
-                    )}
-                  </span>
+              {isPrepaid ? (
+                <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4">
+                  <p className="font-semibold text-green-900">
+                    Covered by your prepaid package
+                  </p>
+
+                  <p className="mt-2 text-sm leading-6 text-green-800">
+                    The required package credits have been deducted from
+                    your balance. No additional payment was required.
+                  </p>
                 </div>
-
-                {booking.pricing.vehicleSurcharge > 0 && (
+              ) : (
+                <div className="mt-4 space-y-3 text-sm">
                   <div className="flex justify-between gap-4">
-                    <span className="text-muted">Vehicle surcharge</span>
+                    <span className="text-muted">Service amount</span>
                     <span className="font-medium text-ink">
                       {formatMoney(
-                        booking.pricing.vehicleSurcharge,
+                        booking.pricing.baseServicePrice,
                         currency
                       )}
                     </span>
                   </div>
-                )}
 
-                <div className="flex justify-between gap-4 border-t border-border pt-4">
-                  <span className="font-semibold text-ink">
-                    Total amount
-                  </span>
-                  <span className="text-xl font-bold text-forest">
-                    {formatMoney(
-                      booking.pricing.totalAmount,
-                      currency
-                    )}
-                  </span>
-                </div>
+                  {booking.pricing.vehicleSurcharge > 0 && (
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted">
+                        Vehicle surcharge
+                      </span>
+                      <span className="font-medium text-ink">
+                        {formatMoney(
+                          booking.pricing.vehicleSurcharge,
+                          currency
+                        )}
+                      </span>
+                    </div>
+                  )}
 
-                <div className="flex justify-between gap-4">
-                  <span className="text-muted">Payment status</span>
-                  <span className="font-semibold capitalize text-ink">
-                    {booking.paymentStatus.replaceAll("_", " ")}
-                  </span>
+                  <div className="flex justify-between gap-4 border-t border-border pt-4">
+                    <span className="font-semibold text-ink">
+                      Total amount
+                    </span>
+                    <span className="text-xl font-bold text-forest">
+                      {formatMoney(
+                        booking.pricing.totalAmount,
+                        currency
+                      )}
+                    </span>
+                  </div>
                 </div>
+              )}
+
+              <div className="mt-4 flex justify-between gap-4 text-sm">
+                <span className="text-muted">Payment status</span>
+                <span className="font-semibold capitalize text-ink">
+                  {isPrepaid
+                    ? "Covered by package"
+                    : booking.paymentStatus.replaceAll("_", " ")}
+                </span>
               </div>
             </div>
           </div>
