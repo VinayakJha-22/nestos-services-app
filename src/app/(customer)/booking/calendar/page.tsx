@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { bookingPreview } from "@/config/booking-preview";
 
 type BookingDate = {
   value: string;
@@ -12,6 +11,32 @@ type BookingDate = {
   day: string;
   month: string;
   isOperatingDay: boolean;
+};
+
+type AvailableSlot = {
+  startTime: string;
+  endTime: string;
+  label: string;
+};
+
+type AvailabilityDate = {
+  date: string;
+  weekday: string;
+  isOperatingDay: boolean;
+  slots: AvailableSlot[];
+};
+
+type AvailabilityResponse = {
+  success: boolean;
+  message?: string;
+  societyId: string;
+  societyName: string;
+  serviceId: string;
+  serviceName: string;
+  durationMinutes: number;
+  timezone: string;
+  bookingHorizonDays: number;
+  dates: AvailabilityDate[];
 };
 
 type VehicleType = "Hatchback" | "Sedan" | "SUV";
@@ -24,39 +49,6 @@ type Service = {
   featured: boolean;
   duration_minutes: number | null;
 };
-
-function getLocalDateString(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function createBookingDates(): BookingDate[] {
-  const today = new Date();
-
-  return Array.from({ length: 14 }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() + index);
-
-    return {
-      value: getLocalDateString(date),
-      weekday: date.toLocaleDateString("en-IN", {
-        weekday: "short",
-      }),
-      day: date.toLocaleDateString("en-IN", {
-        day: "2-digit",
-      }),
-      month: date.toLocaleDateString("en-IN", {
-        month: "short",
-      }),
-      isOperatingDay: bookingPreview.operatingDays.includes(
-        date.getDay()
-      ),
-    };
-  });
-}
 
 export default function BookingCalendarPage() {
   const router = useRouter();
@@ -73,6 +65,11 @@ export default function BookingCalendarPage() {
   const [service, setService] = useState<Service | null>(null);
   const [isLoadingService, setIsLoadingService] = useState(true);
   const [serviceError, setServiceError] = useState("");
+  const [availabilityDates, setAvailabilityDates] = useState<
+    AvailabilityDate[]
+  >([]);
+  const [durationMinutes, setDurationMinutes] = useState(0);
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,22 +124,64 @@ export default function BookingCalendarPage() {
           return;
         }
 
+        const availabilityResponse = await fetch(
+          `/api/availability?societyId=${encodeURIComponent(
+            selectedSociety.id
+          )}&serviceId=${encodeURIComponent(selectedService.id)}`,
+          { cache: "no-store" }
+        );
+
+        const availabilityData: AvailabilityResponse =
+          await availabilityResponse.json();
+
+        if (!availabilityResponse.ok || !availabilityData.success) {
+          throw new Error(
+            availabilityData.message || "Unable to load live availability."
+          );
+        }
+
+        if (!cancelled) {
+          setAvailabilityDates(availabilityData.dates);
+          setDurationMinutes(availabilityData.durationMinutes);
+
+          const calendarDates: BookingDate[] =
+            availabilityData.dates.map((item) => {
+              const date = new Date(`${item.date}T12:00:00`);
+
+              return {
+                value: item.date,
+                weekday: item.weekday,
+                day: date.toLocaleDateString("en-IN", {
+                  day: "2-digit",
+                }),
+                month: date.toLocaleDateString("en-IN", {
+                  month: "short",
+                }),
+                isOperatingDay: item.isOperatingDay,
+              };
+            });
+
+          setDates(calendarDates);
+
+          const firstAvailableDate = availabilityData.dates.find(
+            (item) => item.isOperatingDay && item.slots.length > 0
+          );
+
+          const firstOperatingDate = availabilityData.dates.find(
+            (item) => item.isOperatingDay
+          );
+
+          setSelectedDate(
+            firstAvailableDate?.date ?? firstOperatingDate?.date ?? ""
+          );
+        }
+
         if (!cancelled) {
           setService(selectedService);
           setServiceId(selectedService.id);
           setSocietyId(selectedSociety.id);
           setSocietyName(selectedSociety.name);
 
-          const availableDates = createBookingDates();
-          setDates(availableDates);
-
-          const firstOperatingDay = availableDates.find(
-            (date) => date.isOperatingDay
-          );
-
-          if (firstOperatingDay) {
-            setSelectedDate(firstOperatingDay.value);
-          }
 
           setIsReady(true);
         }
@@ -157,6 +196,7 @@ export default function BookingCalendarPage() {
       } finally {
         if (!cancelled) {
           setIsLoadingService(false);
+          setIsLoadingAvailability(false);
         }
       }
     }
@@ -174,23 +214,8 @@ export default function BookingCalendarPage() {
   const servicePrice = Number(service?.price ?? 0);
   const totalPrice = servicePrice + vehicleSurcharge;
 
-  // DEMO ONLY: simulated slot availability.
-  // This must be replaced with live backend availability.
-  const slotsForSelectedDate = bookingPreview.timeSlots.map(
-    (time, index) => {
-      const dateIndex = dates.findIndex(
-        (date) => date.value === selectedDate
-      );
-
-      const isPreviewUnavailable =
-        (index + dateIndex) % 5 === 4;
-
-      return {
-        time,
-        available: !isPreviewUnavailable,
-      };
-    }
-  );
+  const slotsForSelectedDate =
+    availabilityDates.find((date) => date.date === selectedDate)?.slots ?? [];
 
   function continueToReview() {
     if (!service || !selectedDate || !selectedSlot) {
@@ -271,12 +296,6 @@ export default function BookingCalendarPage() {
       </section>
 
       <section className="container-shell py-8 md:py-12">
-        <div className="mb-8 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-          <strong>Preview mode:</strong> dates, operating days and
-          time-slot availability below are illustrative. No slot is
-          reserved by this page. Live availability will be verified
-          before a booking is confirmed.
-        </div>
 
         <div className="grid items-start gap-8 lg:grid-cols-[1fr_340px]">
           <div className="space-y-8">
@@ -346,33 +365,31 @@ export default function BookingCalendarPage() {
                 </p>
               ) : (
                 <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  {slotsForSelectedDate.map((slot) => (
-                    <button
-                      key={slot.time}
-                      type="button"
-                      disabled={!slot.available}
-                      onClick={() => setSelectedSlot(slot.time)}
-                      className={`min-h-12 rounded-xl border px-3 py-3 text-sm font-semibold transition ${selectedSlot === slot.time
-                        ? "border-forest bg-forest text-white"
-                        : slot.available
-                          ? "border-border bg-white text-ink hover:border-forest"
-                          : "cursor-not-allowed border-border bg-gray-50 text-gray-400 line-through"
-                        }`}
-                    >
-                      {slot.time}
-                      {!slot.available && (
-                        <span className="mt-1 block text-[10px] font-normal no-underline">
-                          Demo unavailable
-                        </span>
-                      )}
-                    </button>
-                  ))}
+                  {slotsForSelectedDate.length === 0 ? (
+                    <p className="col-span-full text-sm text-muted">
+                      No available slots for this date. Please choose another date.
+                    </p>
+                  ) : (
+                    slotsForSelectedDate.map((slot) => (
+                      <button
+                        key={slot.startTime}
+                        type="button"
+                        onClick={() => setSelectedSlot(slot.startTime)}
+                        className={`min-h-12 rounded-xl border px-3 py-3 text-sm font-semibold transition ${selectedSlot === slot.startTime
+                          ? "border-forest bg-forest text-white"
+                          : "border-border bg-white text-ink hover:border-forest"
+                          }`}
+                      >
+                        {slot.label}
+                      </button>
+                    ))
+                  )}
                 </div>
               )}
 
               <p className="mt-4 text-xs leading-5 text-muted">
-                Actual times and capacity will come from the selected
-                society's live schedule.
+                {durationMinutes}-minute wash. Availability is based on the selected
+                society's operating hours and current booking capacity.
               </p>
             </section>
 
