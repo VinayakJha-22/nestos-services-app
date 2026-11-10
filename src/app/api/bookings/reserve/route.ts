@@ -1,4 +1,3 @@
-
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
@@ -46,9 +45,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const tokenHash = createHash("sha256")
-      .update(sessionToken)
-      .digest("hex");
+    const tokenHash = createHash("sha256").update(sessionToken).digest("hex");
 
     const customerResult = await db.query(
       `SELECT
@@ -88,6 +85,7 @@ export async function POST(request: NextRequest) {
     const startTime = body.time;
     const vehicleType = body.vehicleType;
     const requestedPaymentMethod = body.paymentMethod;
+    const idempotencyKey = body.idempotencyKey;
 
     const vehicleDetails =
       typeof body.vehicleDetails === "string"
@@ -95,6 +93,8 @@ export async function POST(request: NextRequest) {
         : null;
 
     if (
+      typeof idempotencyKey !== "string" ||
+      !uuidRegex.test(idempotencyKey) ||
       typeof societyId !== "string" ||
       !uuidRegex.test(societyId) ||
       typeof serviceId !== "string" ||
@@ -119,6 +119,20 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+
+    const requestHash = createHash("sha256")
+      .update(
+        JSON.stringify({
+          societyId,
+          serviceId: serviceId.trim(),
+          date: bookingDate,
+          time: startTime,
+          vehicleType,
+          vehicleDetails,
+          paymentMethod: requestedPaymentMethod,
+        }),
+      )
+      .digest("hex");
 
     const normalizedServiceId = serviceId.trim();
 
@@ -149,17 +163,120 @@ export async function POST(request: NextRequest) {
     const dayOfWeek = parsedDate.getUTCDay();
 
     // 3. Start transaction and serialize reservations for this society/date.
-    client = await db.connect();
-    await client.query("BEGIN");
+    
+client = await db.connect();
+await client.query("BEGIN");
 
-    try {
-      await client.query(
-        `SELECT pg_advisory_xact_lock(
-           hashtext($1),
-           hashtext($2)
-         )`,
-        [societyId, bookingDate],
+try {
+  // 1. Serialize requests using this customer's idempotency key.
+  // This lock is independent of society/date, so even requests
+  // for different booking slots cannot create duplicates.
+  await client.query(
+    `SELECT pg_advisory_xact_lock(
+       hashtext($1),
+       hashtext($2)
+     )`,
+    [customer.id, idempotencyKey],
+  );
+
+  // 2. Check whether this request has already created a booking.
+  const existingBookingResult = await client.query(
+    `SELECT
+       b.id,
+       b.booking_reference,
+       b.idempotency_request_hash,
+       b.booking_date::text AS booking_date,
+       TO_CHAR(b.start_time, 'HH24:MI') AS start_time,
+       TO_CHAR(b.end_time, 'HH24:MI') AS end_time,
+       b.vehicle_type,
+       b.payment_method,
+       b.payment_status,
+       b.booking_status,
+       b.society_name_snapshot,
+       b.service_name_snapshot,
+       b.base_service_price::text AS base_service_price,
+       b.vehicle_surcharge::text AS vehicle_surcharge,
+       b.total_amount::text AS total_amount,
+       r.expires_at
+     FROM public.bookings b
+     LEFT JOIN LATERAL (
+       SELECT expires_at
+       FROM public.booking_slot_reservations
+       WHERE booking_id = b.id
+       ORDER BY expires_at DESC
+       LIMIT 1
+     ) r ON TRUE
+     WHERE b.customer_id = $1
+       AND b.idempotency_key = $2
+     LIMIT 1`,
+    [customer.id, idempotencyKey],
+  );
+
+  if (existingBookingResult.rows.length > 0) {
+    const existing = existingBookingResult.rows[0];
+
+    // The same key cannot be used for a different booking request.
+    if (existing.idempotency_request_hash !== requestHash) {
+      await client.query("ROLLBACK");
+
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "This booking request key has already been used for different booking details. Please start a new booking.",
+        },
+        { status: 409 },
       );
+    }
+
+    // Identical retry: return the original booking.
+    // Do not check capacity again or deduct credits again.
+    await client.query("COMMIT");
+
+    return NextResponse.json({
+      success: true,
+      idempotentReplay: true,
+      bookingId: existing.id,
+      bookingReference: existing.booking_reference,
+      paymentRequired: existing.payment_method === "one_time",
+      paymentMethod: existing.payment_method,
+      paymentStatus: existing.payment_status,
+      bookingStatus: existing.booking_status,
+      creditsUsed: null,
+      creditsRemaining: null,
+      reservationExpiresAt:
+        existing.payment_method === "prepaid"
+          ? null
+          : existing.expires_at,
+      societyName: existing.society_name_snapshot,
+      serviceName: existing.service_name_snapshot,
+      date: existing.booking_date,
+      startTime: existing.start_time,
+      endTime: existing.end_time,
+      vehicleType: existing.vehicle_type,
+      pricing: {
+        baseServicePrice: existing.base_service_price,
+        vehicleSurcharge: existing.vehicle_surcharge,
+        totalAmount: existing.total_amount,
+        currency: "INR",
+      },
+      customer: {
+        name: customer.full_name,
+        email: customer.email,
+        contact: customer.verified_phone,
+      },
+    });
+  }
+
+  // 3. Continue with the existing society/date lock.
+  await client.query(
+    `SELECT pg_advisory_xact_lock(
+       hashtext($1),
+       hashtext($2)
+     )`,
+    [societyId, bookingDate],
+  );
+
 
       // 4. Load society, service, operating hours and booking settings.
       const configResult = await client.query(
@@ -435,7 +552,8 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(
             {
               success: false,
-              error: "This booking slot is no longer available. Please select another time.",
+              error:
+                "This booking slot is no longer available. Please select another time.",
             },
             { status: 409 },
           );
@@ -501,15 +619,11 @@ export async function POST(request: NextRequest) {
         ? Number(prepaidSubscription.credit_cost)
         : 0;
 
-      const bookingStatus = isPrepaid
-        ? "confirmed"
-        : "pending_payment";
+      const bookingStatus = isPrepaid ? "confirmed" : "pending_payment";
 
       const paymentMethod = requestedPaymentMethod;
 
-      const paymentStatus = isPrepaid
-        ? "not_required"
-        : "pending";
+      const paymentStatus = isPrepaid ? "not_required" : "pending";
 
       // 11. Calculate price on the server.
       // Prepaid bookings have no vehicle surcharge.
@@ -558,14 +672,16 @@ export async function POST(request: NextRequest) {
            confirmed_at,
            responsible_party_type,
            responsible_party_reference,
-           responsible_party_name_snapshot
+           responsible_party_name_snapshot,
+           idempotency_key,
+           idempotency_request_hash
          )
          VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8::time, $9::time,
            $10, $11, $12, $13, $14, 'INR',
            $15, $16, $17, 'customer',
            CASE WHEN $15 = 'confirmed' THEN NOW() ELSE NULL END,
-           $18, $19, $20
+           $18, $19, $20, $21, $22
          )
          RETURNING id, booking_reference`,
         [
@@ -589,6 +705,8 @@ export async function POST(request: NextRequest) {
           owner.responsible_party_type,
           owner.responsible_party_reference,
           owner.responsible_party_name_snapshot,
+          idempotencyKey,
+          requestHash,
         ],
       );
 
@@ -692,10 +810,7 @@ export async function POST(request: NextRequest) {
            WHERE id = $1
              AND credits_remaining >= $2
            RETURNING credits_remaining`,
-          [
-            prepaidSubscription.subscription_id,
-            creditCost,
-          ],
+          [prepaidSubscription.subscription_id, creditCost],
         );
 
         if (debitResult.rows.length !== 1) {
