@@ -44,7 +44,7 @@ INSERT INTO public.package_service_credit_costs (
     service_id, credit_cost
 )
 VALUES
-    ('exterior-cleaning', 1)
+    ('exterior-cleaning', 1),
     ('interior-exterior-cleaning', 2),
     ('premium-cleaning', 3)
 ON CONFLICT (service_id) DO UPDATE SET

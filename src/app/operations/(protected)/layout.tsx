@@ -1,5 +1,10 @@
 
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getOperationsUser } from "@/lib/operations/auth";
+import LogoutButton from "./logout-button";
+
+export const instant = false;
 
 const navigation = [
   { label: "Overview", href: "/operations" },
@@ -9,11 +14,17 @@ const navigation = [
   { label: "Reports", href: "/operations/reports" },
 ];
 
-export default function OperationsLayout({
+export default async function OperationsLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+
+  const user = await getOperationsUser();
+
+  if (!user) {
+    redirect("/operations/login");
+  }
   return (
     <div className="min-h-screen bg-[#F7F8F3] text-[#152B25]">
       <header className="border-b border-[#174C3D]/10 bg-white">
@@ -28,7 +39,7 @@ export default function OperationsLayout({
             </div>
           </Link>
 
-          <nav className="flex flex-wrap gap-2">
+          <nav className="flex flex-wrap items-center gap-2">
             {navigation.map((item) => (
               <Link
                 key={item.href}
@@ -38,6 +49,8 @@ export default function OperationsLayout({
                 {item.label}
               </Link>
             ))}
+
+            <LogoutButton />
           </nav>
         </div>
       </header>
