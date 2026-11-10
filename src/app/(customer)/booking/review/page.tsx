@@ -451,22 +451,6 @@ export default function BookingReviewPage() {
                   </div>
                 </div>
 
-                <div className="mt-6 border-t border-border pt-5">
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="font-semibold text-ink">
-                      Total payable
-                    </span>
-
-                    <span className="text-3xl font-bold text-forest">
-                      ₹{totalPrice.toFixed(2)}
-                    </span>
-                  </div>
-
-                  <p className="mt-2 text-xs leading-5 text-muted">
-                    Final amount is subject to server-side validation.
-                  </p>
-                </div>
-
                 {packageEligibility?.hasActivePackage &&
                   packageService &&
                   !packageService.canRedeem && (

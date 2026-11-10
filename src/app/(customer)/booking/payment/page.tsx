@@ -321,20 +321,69 @@ export default function BookingPaymentPage() {
     try {
       let currentBookingId = bookingId;
 
+      
       // A. Create the booking reservation.
       if (!currentBookingId) {
+        // Build a stable fingerprint for this exact booking attempt.
+        const reservationPayload = {
+          societyId: draft.societyId,
+          serviceId: draft.serviceId,
+          date: draft.date,
+          time: draft.time,
+          vehicleType: draft.vehicle.toLowerCase(),
+          vehicleDetails: null,
+          paymentMethod,
+        };
+
+        const requestFingerprint = JSON.stringify(reservationPayload);
+        const storageKey = "nestos-booking-idempotency-attempt";
+
+        // Reuse the key for an identical retry.
+        // Generate a new key if the customer changes booking details
+        // or switches payment method.
+        let idempotencyKey = "";
+
+        try {
+          const savedAttempt = sessionStorage.getItem(storageKey);
+
+          if (savedAttempt) {
+            const parsedAttempt = JSON.parse(savedAttempt);
+
+            if (
+              parsedAttempt.fingerprint === requestFingerprint &&
+              typeof parsedAttempt.key === "string" &&
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+                parsedAttempt.key
+              )
+            ) {
+              idempotencyKey = parsedAttempt.key;
+            }
+          }
+        } catch {
+          // Invalid or inaccessible stored data: create a fresh attempt.
+        }
+
+        if (!idempotencyKey) {
+          idempotencyKey = window.crypto.randomUUID();
+
+          sessionStorage.setItem(
+            storageKey,
+            JSON.stringify({
+              fingerprint: requestFingerprint,
+              key: idempotencyKey,
+            })
+          );
+        }
+
         const reserveResponse = await fetch("/api/bookings/reserve", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            societyId: draft.societyId,
-            serviceId: draft.serviceId,
-            date: draft.date,
-            time: draft.time,
-            vehicleType: draft.vehicle.toLowerCase(),
-            paymentMethod,
+            ...reservationPayload,
+            idempotencyKey,
           }),
         });
+
 
         const reserveData = await reserveResponse.json();
 
