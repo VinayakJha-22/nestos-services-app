@@ -1,15 +1,20 @@
 
 export type BookingStatus =
+  | "Pending Payment"
   | "Confirmed"
   | "Assigned"
   | "In Progress"
   | "Completed"
-  | "Cancelled";
+  | "Cancelled"
+  | "Expired";
 
 export type PaymentStatus =
   | "Paid"
   | "Pending"
-  | "Refund Pending";
+  | "Failed"
+  | "Refund Pending"
+  | "Refunded"
+  | "Not Required";
 
 export type OperationsBooking = {
   id: string;
@@ -137,11 +142,13 @@ export const societies = [
 ];
 
 export const serviceStatuses: BookingStatus[] = [
+  "Pending Payment",
   "Confirmed",
   "Assigned",
   "In Progress",
   "Completed",
   "Cancelled",
+  "Expired",
 ];
 
 export const paymentStatuses: PaymentStatus[] = [
