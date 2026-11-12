@@ -22,6 +22,7 @@ type PaymentStatus =
 
 type Booking = {
   id: string;
+  bookingId: string;
   service: string;
   society: string;
   date: string;
@@ -133,6 +134,7 @@ export default function MyBookingsPage() {
   const [requestedDate, setRequestedDate] = useState("");
   const [requestedTime, setRequestedTime] = useState("");
   const [notice, setNotice] = useState("");
+  const [requestSubmitting, setRequestSubmitting] = useState(false);
 
   useEffect(() => {
     setToday(getTodayDate());
@@ -167,13 +169,14 @@ export default function MyBookingsPage() {
           data.bookings as ApiBooking[]
         ).map((booking) => ({
           id: booking.bookingReference,
+          bookingId: booking.id,
           service: booking.service,
           society: booking.society,
           date: booking.date,
           time: formatTime(booking.startTime),
           vehicle: booking.vehicle
             ? booking.vehicle.charAt(0).toUpperCase() +
-            booking.vehicle.slice(1)
+              booking.vehicle.slice(1)
             : "Not specified",
           amount: Number(booking.amount),
           status: mapBookingStatus(booking.bookingStatus),
@@ -195,10 +198,15 @@ export default function MyBookingsPage() {
     fetchBookings();
   }, []);
 
-
   const isUpcomingBooking = (booking: Booking) =>
     Boolean(today) &&
     ["Confirmed", "In progress"].includes(booking.status) &&
+    booking.date >= today;
+
+  // Change requests are accepted only for future confirmed/assigned bookings.
+  const canRequestBookingChange = (booking: Booking) =>
+    Boolean(today) &&
+    booking.status === "Confirmed" &&
     booking.date >= today;
 
   // Search and filter the live booking records.
@@ -224,7 +232,7 @@ export default function MyBookingsPage() {
     });
   }, [bookings, filter, search, today]);
 
-  // Open the preview-only cancellation or rescheduling form.
+  // Open the cancellation or rescheduling request form.
   function openRequest(booking: Booking, type: RequestType) {
     setNotice("");
     setReason("");
@@ -233,17 +241,70 @@ export default function MyBookingsPage() {
     setRequest({ booking, type });
   }
 
-  function submitPreviewRequest(event: FormEvent<HTMLFormElement>) {
+  async function submitChangeRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!request) return;
+    if (!request || requestSubmitting) return;
 
-    setNotice(
-      `${request.type} request preview completed for ${request.booking.id}. No real request was submitted.`
-    );
+    if (!reason.trim()) {
+      setNotice("Please provide a reason for your request.");
+      return;
+    }
 
-    setRequest(null);
-    setExpandedId(null);
+    if (request.type === "Rescheduling" && (!requestedDate || !requestedTime)) {
+      setNotice("Please select your preferred new date and time.");
+      return;
+    }
+
+    setNotice("");
+
+    try {
+      setRequestSubmitting(true);
+
+      const response = await fetch("/api/bookings/change-requests", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          bookingId: request.booking.bookingId,
+          requestType:
+            request.type === "Cancellation" ? "cancellation" : "reschedule",
+          customerNotes: reason.trim(),
+          ...(request.type === "Rescheduling"
+            ? {
+                requestedBookingDate: requestedDate,
+                requestedStartTime: requestedTime,
+              }
+            : {}),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to submit your request.");
+      }
+
+      setNotice(
+        `${request.type} request submitted successfully for booking ${request.booking.id}. It is now awaiting manager approval.`
+      );
+
+      setRequest(null);
+      setExpandedId(null);
+      setReason("");
+      setRequestedDate("");
+      setRequestedTime("");
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Unable to submit your request. Please try again."
+      );
+    } finally {
+      setRequestSubmitting(false);
+    }
   }
 
   const upcomingCount = bookings.filter(isUpcomingBooking).length;
@@ -277,7 +338,7 @@ export default function MyBookingsPage() {
       </section>
 
       <section className="container-shell py-8 md:py-12">
-        {/* Preview request notification */}
+        {/* Change request notification */}
         {notice && (
           <div
             role="status"
@@ -319,10 +380,11 @@ export default function MyBookingsPage() {
                 key={item}
                 type="button"
                 onClick={() => setFilter(item)}
-                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition ${filter === item
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition ${
+                  filter === item
                     ? "bg-forest text-white"
                     : "border border-border bg-white text-ink hover:border-forest"
-                  }`}
+                }`}
               >
                 {item}
               </button>
@@ -441,7 +503,6 @@ export default function MyBookingsPage() {
                           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                             Payment status
                           </p>
-
                           <p className="mt-1 font-semibold text-ink">
                             {booking.paymentStatus}
                           </p>
@@ -451,7 +512,6 @@ export default function MyBookingsPage() {
                           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                             Vehicle
                           </p>
-
                           <p className="mt-1 font-semibold text-ink">
                             {booking.vehicle}
                           </p>
@@ -461,7 +521,6 @@ export default function MyBookingsPage() {
                           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                             Appointment
                           </p>
-
                           <p className="mt-1 font-semibold text-ink">
                             {formatDate(booking.date)} · {booking.time}
                           </p>
@@ -471,7 +530,6 @@ export default function MyBookingsPage() {
                           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                             Total amount
                           </p>
-
                           <p className="mt-1 font-semibold text-ink">
                             ₹{booking.amount}
                           </p>
@@ -485,8 +543,8 @@ export default function MyBookingsPage() {
                         </p>
                       )}
 
-                      {/* Preview-only request actions */}
-                      {isUpcoming && (
+                      {/* Change request actions */}
+                      {canRequestBookingChange(booking) && (
                         <div className="mt-5 flex flex-wrap gap-3">
                           <button
                             type="button"
@@ -510,7 +568,7 @@ export default function MyBookingsPage() {
                         </div>
                       )}
 
-                      {isUpcoming && (
+                      {canRequestBookingChange(booking) && (
                         <p className="mt-3 text-xs leading-5 text-muted">
                           Requests require manager approval. Your existing
                           booking remains unchanged until a request is
@@ -559,11 +617,13 @@ export default function MyBookingsPage() {
         </div>
       </section>
 
-      {/* Cancellation / rescheduling preview modal */}
+      {/* Cancellation / rescheduling request modal */}
       {request && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-5"
-          onClick={() => setRequest(null)}
+          onClick={() => {
+            if (!requestSubmitting) setRequest(null);
+          }}
         >
           <section
             role="dialog"
@@ -589,8 +649,9 @@ export default function MyBookingsPage() {
               <button
                 type="button"
                 onClick={() => setRequest(null)}
+                disabled={requestSubmitting}
                 aria-label="Close request form"
-                className="rounded-full border border-border px-3 py-1.5 text-ink hover:bg-cream"
+                className="rounded-full border border-border px-3 py-1.5 text-ink hover:bg-cream disabled:opacity-50"
               >
                 ✕
               </button>
@@ -599,10 +660,10 @@ export default function MyBookingsPage() {
             <p className="mt-3 text-sm leading-6 text-muted">
               {request.type === "Cancellation"
                 ? "Tell us why you need to cancel. The existing booking stays unchanged until a manager reviews the request."
-                : "Choose your preferred replacement date and time. This is a request only; your current appointment remains unchanged until approval."}
+                : "Choose your preferred replacement date and time. Your current appointment remains unchanged until approval."}
             </p>
 
-            <form onSubmit={submitPreviewRequest} className="mt-6 space-y-5">
+            <form onSubmit={submitChangeRequest} className="mt-6 space-y-5">
               {request.type === "Rescheduling" && (
                 <>
                   <div>
@@ -644,17 +705,18 @@ export default function MyBookingsPage() {
                       className="mt-2 w-full rounded-xl border border-border bg-white px-4 py-3 text-sm text-ink outline-none focus:border-forest"
                     >
                       <option value="">Select a preferred time</option>
-                      <option value="08:00 AM">08:00 AM</option>
-                      <option value="09:00 AM">09:00 AM</option>
-                      <option value="10:00 AM">10:00 AM</option>
-                      <option value="11:00 AM">11:00 AM</option>
-                      <option value="02:00 PM">02:00 PM</option>
-                      <option value="03:00 PM">03:00 PM</option>
-                      <option value="04:00 PM">04:00 PM</option>
+                      <option value="08:00">08:00 AM</option>
+                      <option value="09:00">09:00 AM</option>
+                      <option value="10:00">10:00 AM</option>
+                      <option value="11:00">11:00 AM</option>
+                      <option value="14:00">02:00 PM</option>
+                      <option value="15:00">03:00 PM</option>
+                      <option value="16:00">04:00 PM</option>
                     </select>
 
                     <p className="mt-2 text-xs leading-5 text-muted">
-                      These are preview choices, not verified available slots.
+                      Your preferred time will be checked by the manager
+                      against the society schedule and availability.
                     </p>
                   </div>
                 </>
@@ -665,44 +727,45 @@ export default function MyBookingsPage() {
                   htmlFor="request-reason"
                   className="block text-sm font-semibold text-ink"
                 >
-                  Reason{" "}
-                  {request.type === "Cancellation"
-                    ? "(required)"
-                    : "(optional)"}
+                  Reason (required)
                 </label>
 
                 <textarea
                   id="request-reason"
-                  required={request.type === "Cancellation"}
+                  required
+                  maxLength={1000}
                   rows={3}
                   value={reason}
                   onChange={(event) => setReason(event.target.value)}
                   placeholder={
                     request.type === "Cancellation"
                       ? "Tell us why you need to cancel"
-                      : "Add any details for the manager"
+                      : "Tell us why you need to reschedule"
                   }
                   className="mt-2 w-full resize-y rounded-xl border border-border px-4 py-3 text-sm text-ink outline-none focus:border-forest"
                 />
               </div>
 
-              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm leading-5 text-amber-950">
-                Preview only: submitting this form will not save or send a
-                real request.
+              <div className="rounded-xl border border-border bg-stone-50 p-3 text-sm leading-5 text-muted">
+                Your request will be sent to the location manager for review.
+                Your existing booking will remain unchanged until the request
+                is approved.
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row">
                 <button
                   type="submit"
-                  className="min-h-12 flex-1 rounded-full bg-forest px-5 text-sm font-semibold text-white hover:bg-ink"
+                  disabled={requestSubmitting}
+                  className="min-h-12 flex-1 rounded-full bg-forest px-5 text-sm font-semibold text-white hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Preview request
+                  {requestSubmitting ? "Submitting..." : "Submit request"}
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setRequest(null)}
-                  className="min-h-12 rounded-full border border-border px-5 text-sm font-semibold text-ink hover:bg-cream"
+                  disabled={requestSubmitting}
+                  className="min-h-12 rounded-full border border-border px-5 text-sm font-semibold text-ink hover:bg-cream disabled:opacity-50"
                 >
                   Go back
                 </button>
