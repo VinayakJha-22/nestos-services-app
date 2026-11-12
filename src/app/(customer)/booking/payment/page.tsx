@@ -277,7 +277,10 @@ export default function BookingPaymentPage() {
         if (cancelled) return;
 
         setSociety(selectedSociety);
-        setService(selectedService);
+        setService({
+          ...selectedService,
+          price: Number(selectedService.price),
+        });
         setPackageEligibility(eligibilityData);
         setPaymentMethod("one_time");
 
@@ -321,7 +324,7 @@ export default function BookingPaymentPage() {
     try {
       let currentBookingId = bookingId;
 
-      
+
       // A. Create the booking reservation.
       if (!currentBookingId) {
         // Build a stable fingerprint for this exact booking attempt.
@@ -673,8 +676,8 @@ export default function BookingPaymentPage() {
                     setPaymentError("");
                   }}
                   className={`w-full rounded-2xl border p-4 text-left transition ${paymentMethod === "prepaid"
-                      ? "border-forest bg-forest/5"
-                      : "border-border hover:border-forest/40"
+                    ? "border-forest bg-forest/5"
+                    : "border-border hover:border-forest/40"
                     } disabled:cursor-not-allowed disabled:opacity-70`}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -698,8 +701,8 @@ export default function BookingPaymentPage() {
 
                     <span
                       className={`mt-1 flex size-5 shrink-0 items-center justify-center rounded-full border ${paymentMethod === "prepaid"
-                          ? "border-forest bg-forest"
-                          : "border-border"
+                        ? "border-forest bg-forest"
+                        : "border-border"
                         }`}
                     >
                       {paymentMethod === "prepaid" && (
@@ -718,8 +721,8 @@ export default function BookingPaymentPage() {
                   setPaymentError("");
                 }}
                 className={`w-full rounded-2xl border p-4 text-left transition ${paymentMethod === "one_time"
-                    ? "border-forest bg-forest/5"
-                    : "border-border hover:border-forest/40"
+                  ? "border-forest bg-forest/5"
+                  : "border-border hover:border-forest/40"
                   } disabled:cursor-not-allowed disabled:opacity-70`}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -735,8 +738,8 @@ export default function BookingPaymentPage() {
 
                   <span
                     className={`flex size-5 shrink-0 items-center justify-center rounded-full border ${paymentMethod === "one_time"
-                        ? "border-forest bg-forest"
-                        : "border-border"
+                      ? "border-forest bg-forest"
+                      : "border-border"
                       }`}
                   >
                     {paymentMethod === "one_time" && (
