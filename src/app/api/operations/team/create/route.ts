@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getOperationsUser, hasOperationsRole } from "@/lib/operations/auth";
@@ -42,7 +41,10 @@ export async function POST(request: NextRequest) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid request body." },
+      { status: 400 },
+    );
   }
 
   const fullName = body.fullName?.trim();
@@ -65,20 +67,35 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
-    return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
+  if (
+    email &&
+    (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  ) {
+    return NextResponse.json(
+      { error: "Enter a valid email address." },
+      { status: 400 },
+    );
   }
 
   if (role !== "central_admin" && role !== "location_manager") {
     return NextResponse.json({ error: "Invalid team role." }, { status: 400 });
   }
 
-  if (!Array.isArray(societyIds) || societyIds.some((id) => typeof id !== "string")) {
-    return NextResponse.json({ error: "Invalid society selection." }, { status: 400 });
+  if (
+    !Array.isArray(societyIds) ||
+    societyIds.some((id) => typeof id !== "string")
+  ) {
+    return NextResponse.json(
+      { error: "Invalid society selection." },
+      { status: 400 },
+    );
   }
 
   if (new Set(societyIds).size !== societyIds.length) {
-    return NextResponse.json({ error: "Duplicate societies selected." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Duplicate societies selected." },
+      { status: 400 },
+    );
   }
 
   if (role === "location_manager" && societyIds.length === 0) {
@@ -90,7 +107,10 @@ export async function POST(request: NextRequest) {
 
   if (role === "central_admin" && societyIds.length > 0) {
     return NextResponse.json(
-      { error: "Central Admin access is global; society assignments are not required." },
+      {
+        error:
+          "Central Admin access is global; society assignments are not required.",
+      },
       { status: 400 },
     );
   }
@@ -119,10 +139,11 @@ export async function POST(request: NextRequest) {
 
       const occupiedResult = await client.query(
         `SELECT s.name
-         FROM public.society_manager_assignment_history a
-         JOIN public.societies s ON s.id = a.society_id
-         WHERE a.society_id = ANY($1::uuid[])
-           AND a.unassigned_at IS NULL`,
+   FROM public.society_manager_assignment_history a
+   JOIN public.societies s ON s.id = a.society_id
+   WHERE a.society_id = ANY($1::uuid[])
+     AND a.responsible_party_type = 'location_manager'
+     AND a.unassigned_at IS NULL`,
         [societyIds],
       );
 
