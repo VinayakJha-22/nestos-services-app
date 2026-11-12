@@ -18,6 +18,7 @@ export type PaymentStatus =
 
 export type OperationsBooking = {
   id: string;
+  databaseId: string;
   customer: string;
   phone: string;
   vehicle: string;
