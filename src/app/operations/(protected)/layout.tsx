@@ -7,7 +7,6 @@ import LogoutButton from "./logout-button";
 export const instant = false;
 
 const navigation = [
-  { label: "Overview", href: "/operations" },
   { label: "Bookings", href: "/operations/bookings" },
   { label: "Payments", href: "/operations/payments" },
   { label: "Change Requests", href: "/operations/change-requests" },
@@ -40,7 +39,12 @@ export default async function OperationsLayout({
           </Link>
 
           <nav className="flex flex-wrap items-center gap-2">
-            {navigation.map((item) => (
+            {[
+              ...navigation,
+              ...(user.role === "central_admin"
+                ? [{ label: "Team & Access", href: "/operations/team" }]
+                : []),
+            ].map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
