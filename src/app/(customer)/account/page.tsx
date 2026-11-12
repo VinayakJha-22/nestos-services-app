@@ -1,9 +1,8 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { societies } from "@/config/societies";
 
 type Profile = {
   fullName: string;
@@ -14,28 +13,106 @@ type Profile = {
   promotionalMessages: boolean;
 };
 
+type Society = {
+  id: string;
+  name: string;
+  address_line: string;
+  locality: string | null;
+  city: string;
+};
+
+type SavedSociety = {
+  name: string;
+  address: string;
+};
+
 const initialProfile: Profile = {
-  fullName: "Alex Customer",
+  fullName: "",
   email: "",
-  phone: "+91 98765 43210",
-  preferredSociety: "sample-society-1",
+  phone: "",
+  preferredSociety: "",
   bookingUpdates: true,
   promotionalMessages: false,
 };
 
 export default function AccountPage() {
   const [profile, setProfile] = useState<Profile>(initialProfile);
+  const [societies, setSocieties] = useState<Society[]>([]);
+  const [savedSociety, setSavedSociety] = useState<SavedSociety | null>(null);
+  const [savedProfile, setSavedProfile] = useState<Profile>(initialProfile);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
   const [editing, setEditing] = useState(false);
   const [showPhoneVerification, setShowPhoneVerification] = useState(false);
-  const [showSignOutConfirmation, setShowSignOutConfirmation] = useState(false);
+  const [showSignOutConfirmation, setShowSignOutConfirmation] =
+    useState(false);
+
   const [newPhone, setNewPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [notice, setNotice] = useState("");
-  const [signOutNotice, setSignOutNotice] = useState(false);
+
+  useEffect(() => {
+    async function loadAccount() {
+      try {
+        const [profileResponse, societiesResponse] = await Promise.all([
+          fetch("/api/auth/me", { cache: "no-store" }),
+          fetch("/api/societies", { cache: "no-store" }),
+        ]);
+
+        const profileData = await profileResponse.json();
+        const societiesData = await societiesResponse.json();
+
+        if (!profileResponse.ok || !profileData.authenticated) {
+          window.location.href = "/sign-in";
+          return;
+        }
+
+        if (!societiesResponse.ok || !societiesData.success) {
+          throw new Error("Unable to load societies.");
+        }
+
+        const customer = profileData.customer;
+
+        const loadedProfile: Profile = {
+          fullName: customer.fullName ?? "",
+          email: customer.email ?? "",
+          phone: customer.phone ?? "",
+          preferredSociety: customer.preferredSocietyId ?? "",
+          bookingUpdates: true,
+          promotionalMessages: customer.promotionalMessages ?? false,
+        };
+
+        setProfile(loadedProfile);
+        setSavedProfile(loadedProfile);
+        setSocieties(societiesData.societies);
+        setSavedSociety(customer.preferredSociety ?? null);
+      } catch (error) {
+        console.error("Account loading error:", error);
+        setNotice("Unable to load your account details. Please refresh.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadAccount();
+  }, []);
 
   const selectedSociety = societies.find(
     (society) => society.id === profile.preferredSociety
   );
+
+  const selectedSocietyAddress = selectedSociety
+    ? [
+        selectedSociety.address_line,
+        selectedSociety.locality,
+        selectedSociety.city,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : savedSociety?.address ?? "";
 
   function updateProfile<K extends keyof Profile>(
     field: K,
@@ -44,16 +121,71 @@ export default function AccountPage() {
     setProfile((current) => ({ ...current, [field]: value }));
   }
 
-  function saveProfile() {
+  async function saveProfile() {
     if (!profile.fullName.trim()) {
       setNotice("Please enter your full name.");
       return;
     }
 
-    setEditing(false);
-    setNotice(
-      "Preview only: profile changes are not saved to an account yet."
-    );
+    setSaving(true);
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/auth/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: profile.fullName.trim(),
+          email: profile.email.trim() || null,
+          preferredSocietyId: profile.preferredSociety || null,
+          promotionalMessages: profile.promotionalMessages,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Unable to save your profile.");
+      }
+
+      setSavedProfile(profile);
+      setEditing(false);
+      setNotice("Your profile has been updated.");
+    } catch (error) {
+      console.error("Profile save error:", error);
+      setNotice(
+        error instanceof Error ? error.message : "Unable to save your profile."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function signOut() {
+    setSigningOut(true);
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/auth/logout", {
+        method: "POST",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Unable to sign out. Please try again.");
+      }
+
+      window.location.href = "/properties";
+    } catch (error) {
+      console.error("Sign-out error:", error);
+      setNotice(
+        error instanceof Error ? error.message : "Unable to sign out."
+      );
+      setShowSignOutConfirmation(false);
+    } finally {
+      setSigningOut(false);
+    }
   }
 
   function verifyPhonePreview() {
@@ -68,11 +200,23 @@ export default function AccountPage() {
     }
 
     setNotice(
-      "Preview only: phone verification is not connected. Your existing verified number has not changed."
+      "Phone verification is not connected yet. Your existing verified number has not changed."
     );
     setShowPhoneVerification(false);
     setNewPhone("");
     setOtp("");
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-cream">
+        <section className="container-shell py-20 text-center">
+          <p className="text-sm font-medium text-muted">
+            Loading your account...
+          </p>
+        </section>
+      </div>
+    );
   }
 
   return (
@@ -82,19 +226,15 @@ export default function AccountPage() {
           <p className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-forest">
             Your account
           </p>
+
           <h1 className="text-3xl font-bold tracking-tight text-ink md:text-4xl">
             Account & profile
           </h1>
+
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted md:text-base">
             Manage your contact details, preferred society and communication
             preferences in one place.
           </p>
-        </div>
-
-        <div className="mb-6 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-          <strong>Development preview:</strong> profile edits are held in this
-          page only. Account storage, OTP verification and secure sign-out
-          require the authentication backend.
         </div>
 
         {notice && (
@@ -104,6 +244,7 @@ export default function AccountPage() {
           >
             <div className="flex items-start justify-between gap-4">
               <p>{notice}</p>
+
               <button
                 type="button"
                 onClick={() => setNotice("")}
@@ -120,7 +261,10 @@ export default function AccountPage() {
           <section className="rounded-3xl border border-border bg-white p-5 md:p-8">
             <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-bold text-ink">Personal details</h2>
+                <h2 className="text-xl font-bold text-ink">
+                  Personal details
+                </h2>
+
                 <p className="mt-1 text-sm text-muted">
                   Your details for bookings and service updates.
                 </p>
@@ -148,6 +292,7 @@ export default function AccountPage() {
                 >
                   Full name
                 </label>
+
                 <input
                   id="fullName"
                   value={profile.fullName}
@@ -165,8 +310,10 @@ export default function AccountPage() {
                   htmlFor="email"
                   className="mb-2 block text-sm font-semibold text-ink"
                 >
-                  Email address <span className="font-normal text-muted">(optional)</span>
+                  Email address{" "}
+                  <span className="font-normal text-muted">(optional)</span>
                 </label>
+
                 <input
                   id="email"
                   type="email"
@@ -187,6 +334,7 @@ export default function AccountPage() {
                 >
                   Verified phone number
                 </label>
+
                 <div className="flex flex-col gap-3 sm:flex-row">
                   <input
                     id="phone"
@@ -194,10 +342,12 @@ export default function AccountPage() {
                     readOnly
                     className="w-full rounded-xl border border-border bg-cream px-4 py-3 text-ink"
                   />
+
                   <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full bg-lime/40 px-3 py-2 text-xs font-semibold text-forest sm:self-center">
-                    <span aria-hidden="true">✓</span> Verified (demo)
+                    <span aria-hidden="true">✓</span> Verified
                   </span>
                 </div>
+
                 <button
                   type="button"
                   onClick={() => {
@@ -217,6 +367,7 @@ export default function AccountPage() {
                 >
                   Preferred society
                 </label>
+
                 <select
                   id="society"
                   value={profile.preferredSociety}
@@ -226,17 +377,35 @@ export default function AccountPage() {
                   }
                   className="w-full rounded-xl border border-border bg-white px-4 py-3 text-ink outline-none transition focus:border-forest disabled:bg-cream"
                 >
+                  <option value="">Select a society (optional)</option>
+
+                  {savedSociety &&
+                    profile.preferredSociety &&
+                    !societies.some(
+                      (society) => society.id === profile.preferredSociety
+                    ) && (
+                      <option value={profile.preferredSociety}>
+                        {savedSociety.name} (not currently accepting bookings)
+                      </option>
+                    )}
+
                   {societies.map((society) => (
                     <option key={society.id} value={society.id}>
                       {society.name}
                     </option>
                   ))}
                 </select>
-                {selectedSociety && (
+
+                {selectedSocietyAddress && (
                   <p className="mt-2 text-xs text-muted">
-                    {selectedSociety.address}
+                    {selectedSocietyAddress}
                   </p>
                 )}
+
+                <p className="mt-2 text-xs text-muted">
+                  Your preferred society is a convenience for future bookings;
+                  you can still book at other available locations.
+                </p>
               </div>
             </div>
 
@@ -245,18 +414,21 @@ export default function AccountPage() {
                 <button
                   type="button"
                   onClick={saveProfile}
-                  className="rounded-full bg-forest px-6 py-3 text-sm font-semibold text-white transition hover:bg-ink"
+                  disabled={saving}
+                  className="rounded-full bg-forest px-6 py-3 text-sm font-semibold text-white transition hover:bg-ink disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Save changes
+                  {saving ? "Saving..." : "Save changes"}
                 </button>
+
                 <button
                   type="button"
                   onClick={() => {
-                    setProfile(initialProfile);
+                    setProfile(savedProfile);
                     setEditing(false);
-                    setNotice("Demo profile restored to its initial values.");
+                    setNotice("");
                   }}
-                  className="rounded-full border border-border px-6 py-3 text-sm font-semibold text-ink transition hover:bg-cream"
+                  disabled={saving}
+                  className="rounded-full border border-border px-6 py-3 text-sm font-semibold text-ink transition hover:bg-cream disabled:opacity-60"
                 >
                   Cancel
                 </button>
@@ -269,6 +441,7 @@ export default function AccountPage() {
               <h2 className="text-xl font-bold text-ink">
                 Communication preferences
               </h2>
+
               <p className="mt-2 text-sm leading-6 text-muted">
                 Important booking information is always enabled. Choose
                 whether you would also like promotional messages.
@@ -278,13 +451,16 @@ export default function AccountPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <p className="font-semibold text-ink">Booking updates</p>
+
                     <p className="mt-1 text-sm leading-5 text-muted">
                       Confirmations, schedule changes and service updates.
                     </p>
+
                     <span className="mt-2 inline-block text-xs font-semibold text-forest">
                       Always on
                     </span>
                   </div>
+
                   <input
                     type="checkbox"
                     checked={true}
@@ -300,13 +476,16 @@ export default function AccountPage() {
                       <span className="block font-semibold text-ink">
                         Promotional messages
                       </span>
+
                       <span className="mt-1 block text-sm leading-5 text-muted">
                         Offers, package deals and service announcements.
                       </span>
                     </span>
+
                     <input
                       type="checkbox"
                       checked={profile.promotionalMessages}
+                      disabled={!editing}
                       onChange={(event) =>
                         updateProfile(
                           "promotionalMessages",
@@ -316,18 +495,19 @@ export default function AccountPage() {
                       className="mt-1 size-5 accent-forest"
                     />
                   </label>
-                  <p className="mt-4 text-xs text-muted">
-                    Preview only: preference changes are not saved yet.
-                  </p>
                 </div>
               </div>
             </section>
 
             <section className="rounded-3xl border border-border bg-white p-5 md:p-7">
-              <h2 className="text-xl font-bold text-ink">Your NestOS activity</h2>
+              <h2 className="text-xl font-bold text-ink">
+                Your NestOS activity
+              </h2>
+
               <p className="mt-2 text-sm leading-6 text-muted">
                 Quickly return to your bookings and prepaid packages.
               </p>
+
               <div className="mt-5 space-y-3">
                 <Link
                   href="/bookings"
@@ -336,6 +516,7 @@ export default function AccountPage() {
                   <span>My bookings</span>
                   <span aria-hidden="true">→</span>
                 </Link>
+
                 <Link
                   href="/packages"
                   className="flex items-center justify-between rounded-xl border border-border px-4 py-3 font-semibold text-ink transition hover:border-forest"
@@ -348,10 +529,12 @@ export default function AccountPage() {
 
             <section className="rounded-3xl border border-red-200 bg-white p-5 md:p-7">
               <h2 className="text-lg font-bold text-ink">Sign out</h2>
+
               <p className="mt-2 text-sm leading-6 text-muted">
                 Sign out of your account on this device. Your bookings and
                 packages will not be deleted.
               </p>
+
               <button
                 type="button"
                 onClick={() => setShowSignOutConfirmation(true)}
@@ -383,6 +566,7 @@ export default function AccountPage() {
             <h2 id="phone-dialog-title" className="text-xl font-bold text-ink">
               Verify your new number
             </h2>
+
             <p className="mt-2 text-sm leading-6 text-muted">
               Enter your new mobile number and the OTP sent to it. The existing
               verified number stays unchanged unless verification succeeds.
@@ -394,10 +578,12 @@ export default function AccountPage() {
             >
               New mobile number
             </label>
+
             <div className="flex rounded-xl border border-border">
               <span className="border-r border-border px-3 py-3 text-sm text-muted">
                 +91
               </span>
+
               <input
                 id="newPhone"
                 inputMode="numeric"
@@ -417,6 +603,7 @@ export default function AccountPage() {
             >
               6-digit OTP
             </label>
+
             <input
               id="otp"
               inputMode="numeric"
@@ -431,7 +618,7 @@ export default function AccountPage() {
 
             <p className="mt-3 text-xs leading-5 text-muted">
               Development preview: no SMS is sent and this form cannot verify
-              a phone number.
+              a phone number yet.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
@@ -442,6 +629,7 @@ export default function AccountPage() {
               >
                 Continue
               </button>
+
               <button
                 type="button"
                 onClick={() => setShowPhoneVerification(false)}
@@ -465,50 +653,33 @@ export default function AccountPage() {
             <h2 id="signout-dialog-title" className="text-xl font-bold text-ink">
               Sign out of NestOS?
             </h2>
+
             <p className="mt-3 text-sm leading-6 text-muted">
               You will need to verify your identity again to access your
               account. Your bookings and packages will remain available when
               you sign back in.
             </p>
-            <p className="mt-3 text-xs leading-5 text-muted">
-              Preview only: secure session invalidation is not connected yet.
-            </p>
+
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  setShowSignOutConfirmation(false);
-                  setSignOutNotice(true);
-                }}
-                className="rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white"
+                onClick={signOut}
+                disabled={signingOut}
+                className="rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Confirm sign out
+                {signingOut ? "Signing out..." : "Confirm sign out"}
               </button>
+
               <button
                 type="button"
                 onClick={() => setShowSignOutConfirmation(false)}
-                className="rounded-full border border-border px-5 py-3 text-sm font-semibold text-ink"
+                disabled={signingOut}
+                className="rounded-full border border-border px-5 py-3 text-sm font-semibold text-ink disabled:opacity-60"
               >
                 Stay signed in
               </button>
             </div>
           </section>
-        </div>
-      )}
-
-      {signOutNotice && (
-        <div className="fixed bottom-5 left-1/2 z-[60] w-[calc(100%-32px)] max-w-lg -translate-x-1/2 rounded-2xl border border-border bg-white p-4 shadow-xl">
-          <p className="text-sm leading-6 text-ink">
-            Preview only: you have not been signed out because real
-            authentication and session invalidation are not connected yet.
-          </p>
-          <button
-            type="button"
-            onClick={() => setSignOutNotice(false)}
-            className="mt-3 text-sm font-semibold text-forest underline underline-offset-4"
-          >
-            Close
-          </button>
         </div>
       )}
     </div>
