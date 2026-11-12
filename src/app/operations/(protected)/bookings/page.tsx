@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 import {
   serviceStatuses,
   changeRequests,
-  bookingActivities,
 } from "@/lib/operations/bookings";
 
 import type { OperationsBooking } from "@/lib/operations/bookings";
@@ -21,6 +20,17 @@ const statusStyles: Record<string, string> = {
   Cancelled: "bg-red-50 text-red-700",
   "Pending Payment": "bg-amber-50 text-amber-700",
   Expired: "bg-gray-100 text-gray-600",
+};
+
+type BookingHistoryActivity = {
+  id: string;
+  previousStatus: string | null;
+  newStatus: string;
+  changedByType: string;
+  changedByReference: string | null;
+  actorName: string;
+  notes: string | null;
+  createdAt: string;
 };
 
 const statusTimeline = [
@@ -82,7 +92,12 @@ export default function OperationsBookingsPage() {
     OperationsBooking[]
   >([]);
 
-  const [activityRecords] = useState([...bookingActivities]);
+  const [activityRecords, setActivityRecords] = useState<
+    BookingHistoryActivity[]
+  >([]);
+
+  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
+  const [activityError, setActivityError] = useState("");
 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -128,6 +143,65 @@ export default function OperationsBookingsPage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!selectedBooking) {
+      setActivityRecords([]);
+      setActivityError("");
+      setIsLoadingActivity(false);
+      return;
+    }
+
+    let active = true;
+
+    async function loadBookingHistory() {
+      try {
+        setIsLoadingActivity(true);
+        setActivityError("");
+        setActivityRecords([]);
+
+        const response = await fetch(
+          `/api/operations/bookings/${selectedBooking!.databaseId}/history`,
+          {
+            method: "GET",
+            cache: "no-store",
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error || "Unable to load booking activity."
+          );
+        }
+
+        if (active) {
+          setActivityRecords(data.activities ?? []);
+        }
+      } catch (error) {
+        console.error("Failed to load booking history:", error);
+
+        if (active) {
+          setActivityError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load booking activity."
+          );
+        }
+      } finally {
+        if (active) {
+          setIsLoadingActivity(false);
+        }
+      }
+    }
+
+    loadBookingHistory();
+
+    return () => {
+      active = false;
+    };
+  }, [selectedBooking?.databaseId, selectedBooking?.status]);
 
   const filteredBookings = bookingRecords.filter((booking) => {
     const query = search.trim().toLowerCase();
@@ -447,10 +521,9 @@ export default function OperationsBookingsPage() {
 
                     <td className="px-5 py-4">
                       <span
-                        className={`inline-flex whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${
-                          statusStyles[booking.status] ??
+                        className={`inline-flex whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[booking.status] ??
                           "bg-gray-100 text-gray-700"
-                        }`}
+                          }`}
                       >
                         {booking.status}
                       </span>
@@ -458,10 +531,9 @@ export default function OperationsBookingsPage() {
 
                     <td className="px-5 py-4">
                       <span
-                        className={`inline-flex whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${
-                          paymentStyles[booking.payment] ??
+                        className={`inline-flex whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold ${paymentStyles[booking.payment] ??
                           "bg-gray-100 text-gray-700"
-                        }`}
+                          }`}
                       >
                         {booking.payment}
                       </span>
@@ -612,13 +684,12 @@ export default function OperationsBookingsPage() {
                             <p className="font-medium">{request.type}</p>
 
                             <span
-                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                                request.status === "Pending Review"
-                                  ? "bg-amber-50 text-amber-700"
-                                  : request.status === "Approved"
-                                    ? "bg-green-50 text-green-700"
-                                    : "bg-red-50 text-red-700"
-                              }`}
+                              className={`rounded-full px-2.5 py-1 text-xs font-semibold ${request.status === "Pending Review"
+                                ? "bg-amber-50 text-amber-700"
+                                : request.status === "Approved"
+                                  ? "bg-green-50 text-green-700"
+                                  : "bg-red-50 text-red-700"
+                                }`}
                             >
                               {request.status}
                             </span>
@@ -670,70 +741,70 @@ export default function OperationsBookingsPage() {
                 })()}
               </div>
 
+
               <div className="rounded-xl border border-gray-200 p-4">
                 <h3 className="font-semibold">Activity log</h3>
 
                 <p className="mt-1 text-sm text-gray-500">
-                  Existing sample activity entries. New status changes are
-                  recorded in the database history.
+                  Actual booking status changes recorded in the database.
                 </p>
 
-                {(() => {
-                  const activities = activityRecords
-                    .filter(
-                      (activity) =>
-                        activity.bookingId === selectedBooking.id
-                    )
-                    .sort(
-                      (a, b) =>
-                        new Date(b.timestamp).getTime() -
-                        new Date(a.timestamp).getTime()
-                    );
-
-                  return activities.length === 0 ? (
-                    <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-500">
-                      No activity records available for this booking.
+                {isLoadingActivity ? (
+                  <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-500">
+                    Loading booking activity...
+                  </p>
+                ) : activityError ? (
+                  <div className="mt-4 rounded-lg bg-red-50 p-3">
+                    <p className="text-sm text-red-700">
+                      {activityError}
                     </p>
-                  ) : (
-                    <ol className="mt-4 space-y-4">
-                      {activities.map((activity) => (
-                        <li key={activity.id} className="flex gap-3">
-                          <div className="mt-1 size-2 shrink-0 rounded-full bg-[#174C3D]" />
+                  </div>
+                ) : activityRecords.length === 0 ? (
+                  <p className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-500">
+                    No status changes have been recorded for this booking yet.
+                  </p>
+                ) : (
+                  <ol className="mt-4 space-y-4">
+                    {activityRecords.map((activity) => (
+                      <li key={activity.id} className="flex gap-3">
+                        <div className="mt-1 size-2 shrink-0 rounded-full bg-[#174C3D]" />
 
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-sm font-semibold">
-                                {activity.type}
-                              </p>
-
-                              <time className="text-xs text-gray-500">
-                                {new Date(
-                                  activity.timestamp
-                                ).toLocaleString("en-IN", {
-                                  day: "numeric",
-                                  month: "short",
-                                  year: "numeric",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                  timeZone: "Asia/Kolkata",
-                                })}
-                              </time>
-                            </div>
-
-                            <p className="mt-1 text-sm text-gray-600">
-                              {activity.description}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-semibold">
+                              {activity.previousStatus
+                                ? `${activity.previousStatus.replaceAll("_", " ")} → ${activity.newStatus.replaceAll("_", " ")}`
+                                : `Booking status: ${activity.newStatus.replaceAll("_", " ")}`}
                             </p>
 
-                            <p className="mt-1 text-xs text-gray-500">
-                              By: {activity.performedBy}
-                            </p>
+                            <time className="text-xs text-gray-500">
+                              {new Date(activity.createdAt).toLocaleString("en-IN", {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                timeZone: "Asia/Kolkata",
+                              })}
+                            </time>
                           </div>
-                        </li>
-                      ))}
-                    </ol>
-                  );
-                })()}
+
+                          <p className="mt-1 text-sm text-gray-600">
+                            {activity.notes || "No additional notes."}
+                          </p>
+
+                          <p className="mt-1 text-xs text-gray-500">
+                            By: {activity.actorName}
+                            {" · "}
+                            {activity.changedByType.replaceAll("_", " ")}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
+
 
               <div className="rounded-xl border border-gray-200 p-4">
                 <h3 className="font-semibold">Service status timeline</h3>
@@ -763,11 +834,10 @@ export default function OperationsBookingsPage() {
                           className="flex items-start gap-3"
                         >
                           <div
-                            className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold ${
-                              isComplete
-                                ? "bg-[#174C3D] text-white"
-                                : "border border-gray-300 bg-white text-gray-400"
-                            }`}
+                            className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold ${isComplete
+                              ? "bg-[#174C3D] text-white"
+                              : "border border-gray-300 bg-white text-gray-400"
+                              }`}
                           >
                             {isComplete ? "✓" : index + 1}
                           </div>
@@ -805,10 +875,9 @@ export default function OperationsBookingsPage() {
                   </span>
 
                   <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      statusStyles[selectedBooking.status] ??
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyles[selectedBooking.status] ??
                       "bg-gray-100 text-gray-700"
-                    }`}
+                      }`}
                   >
                     {selectedBooking.status}
                   </span>
@@ -820,10 +889,9 @@ export default function OperationsBookingsPage() {
                   </span>
 
                   <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      paymentStyles[selectedBooking.payment] ??
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${paymentStyles[selectedBooking.payment] ??
                       "bg-gray-100 text-gray-700"
-                    }`}
+                      }`}
                   >
                     {selectedBooking.payment}
                   </span>
@@ -844,8 +912,8 @@ export default function OperationsBookingsPage() {
                     onChange={(event) => {
                       setPendingStatus(
                         event.target.value as
-                          | (typeof serviceStatuses)[number]
-                          | ""
+                        | (typeof serviceStatuses)[number]
+                        | ""
                       );
                       setStatusUpdateError("");
                     }}

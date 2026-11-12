@@ -69,6 +69,7 @@ function mapBooking(record: OperationsBookingApiRecord): OperationsBooking {
   return {
     id: record.booking_reference,
     databaseId: record.id,
+    customer: record.customer_name,
     phone: record.customer_phone,
     vehicle: record.vehicle_details
       ? `${record.vehicle_type} · ${record.vehicle_details}`
