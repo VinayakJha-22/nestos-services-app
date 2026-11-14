@@ -1,6 +1,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 const packages = {
   starter: {
@@ -30,7 +31,23 @@ type PurchasePageProps = {
   searchParams: Promise<{ package?: string }>;
 };
 
-export default async function PackagePurchasePage({
+export default function PackagePurchasePage({
+  searchParams,
+}: PurchasePageProps) {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-cream flex items-center justify-center">
+          <p className="text-sm text-muted">Loading package details...</p>
+        </div>
+      }
+    >
+      <PackagePurchaseContent searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function PackagePurchaseContent({
   searchParams,
 }: PurchasePageProps) {
   const { package: packageId } = await searchParams;
